@@ -1,0 +1,7 @@
+{
+  "relayerAddresses": {
+    "polygon": "0x88066f3506E14427f187984c9e43Dc6Fc9198d96",
+    "arbitrum": "0x77d4C017fAA44Ff6f96e2877b45Befd233D0ef65",
+    "base": "0x7337d8b9E84B0C9f88316439AfFaE9eE99b6C3C1"
+  }
+}
