@@ -8,10 +8,14 @@ import { WagmiProvider } from 'wagmi';
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
 import { baseSepolia } from 'wagmi/chains';
 
-// WalletConnect Project ID is optional - only needed for WalletConnect wallet connections
-// For MetaMask and browser wallets, it works without it
-const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ||
-  'a5bba1ba8b3f0a26f0e9e045a7b89e5b'; // Demo project ID
+if (!process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID) {
+  throw new Error(
+    'NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set in your environment variables. ' +
+    'Get one from https://cloud.walletconnect.com/'
+  );
+}
+
+const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 
 const config = getDefaultConfig({
   appName: 'OneTap',

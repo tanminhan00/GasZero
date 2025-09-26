@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { relayerService, type RelayRequest } from '@/lib/relayer-service';
+import { relayerService, type RelayRequest, type SupportedToken } from '@/lib/relayer-service';
+import { DEX_CONFIG } from '@/config/chain.config';
 import { verifyMessage } from 'viem';
 
 // Rate limiting (simple in-memory, use Redis in production)
@@ -59,10 +60,11 @@ export async function POST(request: NextRequest) {
 
     // 4. Create relay request
     const relayRequest: RelayRequest = {
+      type: 'transfer',
       chain,
       fromAddress: from,
       toAddress: to,
-      token: token.toUpperCase() as 'USDC' | 'USDT',
+      token: token.toUpperCase() as SupportedToken,
       amount,
       signature,
       nonce: intent?.nonce || 0,
@@ -139,14 +141,21 @@ export async function GET(request: NextRequest) {
 }
 
 function getExplorerUrl(chain: string, hash: string): string {
-  const explorers: Record<string, string> = {
-    polygon: `https://polygonscan.com/tx/${hash}`,
-    'polygon-mumbai': `https://mumbai.polygonscan.com/tx/${hash}`,
-    arbitrum: `https://arbiscan.io/tx/${hash}`,
-    'arbitrum-sepolia': `https://sepolia.arbiscan.io/tx/${hash}`,
-    base: `https://basescan.org/tx/${hash}`,
-    'base-sepolia': `https://sepolia.basescan.org/tx/${hash}`,
-  };
-
-  return explorers[chain] || `https://etherscan.io/tx/${hash}`;
+  // Dynamic explorer URLs based on chain
+  switch (chain) {
+    case 'base':
+      return `https://basescan.org/tx/${hash}`;
+    case 'base-sepolia':
+      return `https://sepolia.basescan.org/tx/${hash}`;
+    case 'arbitrum':
+      return `https://arbiscan.io/tx/${hash}`;
+    case 'arbitrum-sepolia':
+      return `https://sepolia.arbiscan.io/tx/${hash}`;
+    case 'optimism':
+      return `https://optimistic.etherscan.io/tx/${hash}`;
+    case 'optimism-sepolia':
+      return `https://sepolia-optimistic.etherscan.io/tx/${hash}`;
+    default:
+      return `https://sepolia.basescan.org/tx/${hash}`; // Default to Base Sepolia
+  }
 }

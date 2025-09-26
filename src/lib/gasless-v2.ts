@@ -14,6 +14,30 @@ const CHAINS = {
 
 export type SupportedChain = keyof typeof CHAINS;
 
+// Verify a signature
+export async function verifySignature(
+  message: string,
+  signature: string,
+  address: string
+): Promise<boolean> {
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(),
+  });
+
+  try {
+    const valid = await publicClient.verifyMessage({
+      message,
+      signature: signature as `0x${string}`,
+      address: address as `0x${string}`,
+    });
+    return valid;
+  } catch (error) {
+    console.error('Signature verification failed:', error);
+    return false;
+  }
+}
+
 // Sign an intent message (no gas needed!)
 export async function signIntent(
   message: string,
@@ -97,7 +121,7 @@ export async function executeGaslessTransactionV2(
 export async function getBalanceOnChain(
   userAddress: `0x${string}`,
   chain: SupportedChain,
-  token: string = 'USDC'
+  token: 'USDC' = 'USDC'
 ): Promise<string> {
   const publicClient = createPublicClient({
     chain: CHAINS[chain],

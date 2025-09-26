@@ -8,22 +8,22 @@ import { baseSepolia, arbitrumSepolia } from 'viem/chains';
 import toast, { Toaster } from 'react-hot-toast';
 import relayerAddresses from '@/config/relayers.json';
 
-type Chain = 'arbitrum' | 'base';
+type Chain = 'arb-sepolia' | 'base-sepolia';
 type Token = 'USDC' | 'USDT';
 
 const TOKEN_ADDRESSES = {
-  arbitrum: {
+  'arb-sepolia': {
     USDC: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
     USDT: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
   },
-  base: {
+  'base-sepolia': {
     USDC: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     USDT: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   },
 };
 
 export default function GasZeroApp() {
-  const [selectedChain, setSelectedChain] = useState<Chain>('base');
+  const [selectedChain, setSelectedChain] = useState<Chain>('base-sepolia');
   const [selectedToken, setSelectedToken] = useState<Token>('USDC');
   const [recipientAddress, setRecipientAddress] = useState('');
   const [amount, setAmount] = useState('');
@@ -37,21 +37,21 @@ export default function GasZeroApp() {
 
   // Chain configurations
   const chains = {
-    arbitrum: {
+    'arb-sepolia': {
       name: 'Arbitrum Sepolia',
       color: 'from-blue-500 to-cyan-500',
       icon: '⚡',
       tokens: ['USDC', 'USDT'],
       chain: arbitrumSepolia,
-      relayer: relayerAddresses.relayerAddresses.arbitrum,
+      relayer: relayerAddresses.relayerAddresses['arb-sepolia'],
     },
-    base: {
+    'base-sepolia': {
       name: 'Base Sepolia',
       color: 'from-blue-600 to-indigo-600',
       icon: '🔷',
       tokens: ['USDC', 'USDT'],
       chain: baseSepolia,
-      relayer: relayerAddresses.relayerAddresses.base,
+      relayer: relayerAddresses.relayerAddresses['base-sepolia'],
     },
   };
 
