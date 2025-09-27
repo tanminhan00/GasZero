@@ -8,10 +8,12 @@ import { arbitrumSepolia, sepolia } from 'viem/chains';
 import toast, { Toaster } from 'react-hot-toast';
 import relayerAddresses from '@/config/relayers.json';
 import { NetworkType, DEX_CONFIG } from '@/config/chain.config';
-import { getApprovalData, estimateGas, swapWithApproval, getUserBalance, getPrice, getPool, swap } from '@/lib/expand-api';
+import { getUserBalance, getPrice, getPool } from '@/lib/expand-api';
 import { EXPAND_CONFIG } from '@/config/expand.config';
+import { executeDirectSwap } from '@/lib/direct-swap';
+import { executeRelayerSwap } from '@/lib/relayer-swap';
 type SwapSupportedChain = 'eth-sepolia' | 'arb-sepolia';
-type SupportedChain = SwapSupportedChain | 'base-sepolia';
+type SupportedChain = SwapSupportedChain;
 type TokenType = keyof typeof DEX_CONFIG['eth-sepolia']['TOKENS'];
 type DexConfigType = typeof DEX_CONFIG['eth-sepolia'];
 // Define token interface
@@ -75,6 +77,7 @@ export default function SwapPage() {
     liquidity: string;
   } | null>(null);
   const [autoApprovingEnabled, setAutoApprovingEnabled] = useState(true);
+  const [swapMode, setSwapMode] = useState<'direct' | 'relayer'>('direct');
   // Removed quote state
   const [approvalHistory, setApprovalHistory] = useState<{
     approvals: { spender: string; amount: string; timestamp: string; }[];
@@ -159,7 +162,6 @@ export default function SwapPage() {
             chainId,
           });
 
-          console.log('Pool response:', poolResponse);
           if (poolResponse.status === 200) {
             setPoolData({
               pool: poolResponse.data.pool,
@@ -177,7 +179,6 @@ export default function SwapPage() {
             amountIn: parseUnits(amount, getSupportedTokens(selectedChain)[fromToken].decimals).toString(),
           });
 
-          console.log('Price response:', priceResponse);
           if (priceResponse.status === 200) {
             setExpectedOutput(priceResponse.data.amountOut);
             setPriceImpact(priceResponse.data.priceImpact || '0');
@@ -201,20 +202,7 @@ export default function SwapPage() {
     }
   }, [amount, fromToken, toToken, address, isConnected, selectedChain]);
 
-  async function getApprovalHistory() {
-    if (!address) return;
-
-    try {
-      const chainConfig = swapChains[selectedChain];
-      const approvalData = await getApprovalData(
-        chainConfig.chain.id.toString(),
-        address
-      );
-      setApprovalHistory(approvalData);
-    } catch (error) {
-      console.error('Error getting approval history:', error);
-    }
-  }
+  // Removed approval history function as we're not using Expand API anymore
 
   async function checkApproval() {
     if (!address || !amount) return;
@@ -335,243 +323,103 @@ export default function SwapPage() {
     }
   }
 
-  async function handleSwap() {
-    console.log('Swap attempt:', {
-      address,
-      amount,
-      isConnected,
-      needsApproval,
-      userETHBalance,
-      selectedChain
-    });
-
+  async function handleRelayerSwap() {
     if (!address || !amount) {
       toast.error(`Please check: ${!address ? 'Wallet not connected' : ''} ${!amount ? 'Amount not entered' : ''}`);
       return;
     }
 
-    // Check approval and handle if needed
-    if (needsApproval) {
-      const ethBalance = parseEther(userETHBalance);
-      if (ethBalance < parseEther('0.0001')) {
-        // Request ETH funding
-        toast.error('Insufficient ETH for approval. Please get some testnet ETH.');
-        return;
-      } else {
-        toast.error('Please approve the token first');
-        return;
+    setLoading(true);
+    const toastId = toast.loading('Preparing relayer swap...');
+
+    try {
+      // Get relayer's private key from environment variable
+      const relayerPrivateKey = process.env.NEXT_PUBLIC_RELAYER_PRIVATE_KEY;
+      if (!relayerPrivateKey) {
+        throw new Error('Relayer configuration missing');
       }
+
+      // Execute the relayer swap
+      const { hash, ethAmount } = await executeRelayerSwap(
+        address as `0x${string}`,
+        amount,
+        relayerPrivateKey,
+        0.5 // 0.5% fee
+      );
+
+      toast.success(
+        <div>
+          <p className="font-bold">🎉 Relayer Swap Successful!</p>
+          <p className="text-sm">Swapped {amount} {fromToken} for {ethAmount} ETH</p>
+          <p className="text-xs">Fee: 0.5%</p>
+          <a
+            href={`${swapChains[selectedChain].chain.blockExplorers?.default.url}/tx/${hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs underline mt-2 block hover:opacity-80"
+          >
+            View on Explorer →
+          </a>
+        </div>,
+        { id: toastId, duration: 10000 }
+      );
+
+      setAmount('');
+      checkApproval();
+    } catch (error: any) {
+      console.error('Relayer swap error:', error);
+      toast.error(error.message || 'Relayer swap failed', { id: toastId });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleDirectSwap() {
+    if (!address || !amount) {
+      toast.error(`Please check: ${!address ? 'Wallet not connected' : ''} ${!amount ? 'Amount not entered' : ''}`);
+      return;
     }
 
     setLoading(true);
-    const toastId = toast.loading('Preparing gasless swap...');
+    const toastId = toast.loading('Preparing swap...');
 
     try {
-      // Ensure we're on the correct chain first
-      const chainConfig = swapChains[selectedChain];
-      const ethereum = (window as any).ethereum;
-      
-      if (ethereum) {
-        await ethereum.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: `0x${chainConfig.chain.id.toString(16)}` }],
-        }).catch(async (switchError: any) => {
-          if (switchError.code === 4902) {
-            await ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: `0x${chainConfig.chain.id.toString(16)}`,
-                chainName: chainConfig.name,
-                rpcUrls: [chainConfig.chain.rpcUrls.default.http[0]],
-                nativeCurrency: chainConfig.chain.nativeCurrency,
-                blockExplorerUrls: [chainConfig.chain.blockExplorers?.default.url],
-              }],
-            });
-          } else {
-            throw switchError;
-          }
-        });
-      }
-
-      // Calculate minimum amount out with 0.5% slippage
-      const amountIn = parseUnits(amount, getSupportedTokens(selectedChain)[fromToken].decimals);
-      const minAmountOut = (amountIn * 995n) / 1000n; // 0.5% slippage
-
-      const message = JSON.stringify({
-        type: 'swap',
-        chain: selectedChain,
+      const hash = await executeDirectSwap(
+        selectedChain,
         fromToken,
         toToken,
         amount,
-        minAmountOut: minAmountOut.toString(),
-        timestamp: Date.now(),
-      });
+        address as `0x${string}`,
+        0.5 // 0.5% slippage
+      );
 
-      toast.loading('✍️ Please sign the message (FREE - no gas!)...', { id: toastId });
-      const signature = await signMessageAsync({ message });
+      toast.success(
+        <div>
+          <p className="font-bold">🎉 Swap Successful!</p>
+          <p className="text-sm">Swapped {amount} {fromToken} for {toToken}</p>
+          <p className="text-xs">Slippage: 0.5%</p>
+          <a
+            href={`${swapChains[selectedChain].chain.blockExplorers?.default.url}/tx/${hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs underline mt-2 block hover:opacity-80"
+          >
+            View on Explorer →
+          </a>
+        </div>,
+        { id: toastId, duration: 10000 }
+      );
 
-      toast.loading('⚡ Executing swap gaslessly...', { id: toastId });
-
-      // Get the token addresses
-      const fromTokenAddress = getSupportedTokens(selectedChain)[fromToken].address;
-      const toTokenAddress = getSupportedTokens(selectedChain)[toToken].address;
-
-      // Get the chain's DEX ID
-      const dexId = EXPAND_CONFIG.SUPPORTED_CHAINS[selectedChain].dexId;
-
-      // Create clients
-      const walletClient = createWalletClient({
-        account: address as `0x${string}`,
-        chain: swapChains[selectedChain].chain,
-        transport: custom((window as any).ethereum),
-      });
-
-      const publicClient = createPublicClient({
-        chain: swapChains[selectedChain].chain,
-        transport: http(),
-      });
-
-      // Check if we need to approve the router
-      const routerAddress = '0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E'; // Uniswap V3 Router
-      const tokenContract = {
-        address: fromTokenAddress as `0x${string}`,
-        abi: [{
-          name: 'allowance',
-          type: 'function',
-          inputs: [
-            { name: 'owner', type: 'address' },
-            { name: 'spender', type: 'address' }
-          ],
-          outputs: [{ name: '', type: 'uint256' }],
-          stateMutability: 'view',
-        }],
-      };
-
-      const allowance = await publicClient.readContract({
-        ...tokenContract,
-        functionName: 'allowance',
-        args: [address, routerAddress],
-      });
-
-      if ((allowance as bigint) < amountIn) {
-        toast.loading('Approving token...', { id: toastId });
-        
-        const approveData = encodeFunctionData({
-          abi: [{
-            name: 'approve',
-            type: 'function',
-            inputs: [
-              { name: 'spender', type: 'address' },
-              { name: 'amount', type: 'uint256' }
-            ],
-            outputs: [{ type: 'bool' }]
-          }],
-          functionName: 'approve',
-          args: [routerAddress as `0x${string}`, amountIn * 2n] // Approve double the amount to avoid future approvals
-        });
-
-        const approveHash = await walletClient.sendTransaction({
-          to: fromTokenAddress as `0x${string}`,
-          data: approveData,
-          chain: swapChains[selectedChain].chain,
-        });
-
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
-        toast.loading('Approval confirmed, preparing swap...', { id: toastId });
-      }
-
-      // Call Expand Network's swap endpoint
-      const expandResponse = await swapWithApproval({
-        dexId: EXPAND_CONFIG.SUPPORTED_CHAINS[selectedChain].dexId,
-        amountIn: amountIn.toString(),
-        amountOutMin: minAmountOut.toString(),
-        path: [fromTokenAddress, toTokenAddress],
-        to: address,
-        deadline: Math.floor(Date.now() / 1000 + 3600).toString(), // 1 hour from now
-        from: address,
-        gas: '800000'
-      });
-
-      let hash: Hash;
-
-      console.log('Expand API Response:', expandResponse);
-
-      if (expandResponse.status !== 200) {
-        throw new Error(`API Error: ${expandResponse.msg}`);
-      }
-
-      // Execute the swap transactions
-      for (const tx of expandResponse.data) {
-        const txHash = await walletClient.sendTransaction({
-          to: tx.to as `0x${string}`,
-          data: tx.data as `0x${string}`,
-          value: BigInt(tx.value || '0'),
-          gas: BigInt(tx.gas),
-          chain: swapChains[selectedChain].chain,
-        });
-
-        // Wait for confirmation
-        await publicClient.waitForTransactionReceipt({ hash: txHash });
-        hash = txHash;
-      }
-      console.log('Expand API Response:', {
-        expandResponse,
-        status: expandResponse.status,
-        msg: expandResponse.msg,
-        transactions: expandResponse.data
-      });
-
-      // For API compatibility
-      const response = { 
-        ok: true,
-        json: () => Promise.resolve({
-          success: true,
-          hash,
-          explorer: `${swapChains[selectedChain].chain.blockExplorers?.default.url}/tx/${hash}`
-        })
-      };
-
-      const result = await response.json();
-
-      if (result.success) {
-        toast.success(
-          <div>
-            <p className="font-bold">🎉 Swap Successful!</p>
-            <p className="text-sm">Swapped {amount} {fromToken} for {toToken}</p>
-            <p className="text-xs">Slippage: 0.5%</p>
-            <p className="text-xs font-bold text-green-600">No ETH was used!</p>
-            <a
-              href={`${result.explorer}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs underline mt-2 block hover:opacity-80"
-            >
-              View on Explorer →
-            </a>
-          </div>,
-          { id: toastId, duration: 10000 }
-        );
-
-        // Reset form
-        setAmount('');
-        checkApproval();
-      } else {
-        const errorMessage = 'Swap failed';
-        toast.error(errorMessage, { id: toastId });
-      }
+      setAmount('');
+      checkApproval();
     } catch (error: any) {
       console.error('Swap error:', error);
-      console.error('Full error details:', {
-        error,
-        message: error.message,
-        stack: error.stack,
-        cause: error.cause
-      });
       toast.error(error.message || 'Swap failed', { id: toastId });
     } finally {
       setLoading(false);
     }
   }
+
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
@@ -608,9 +456,9 @@ export default function SwapPage() {
                 </div>
                 <div>
                   <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                    GasZero Swap
+                    OneTap Swap
                   </h1>
-                  <p className="text-xs text-gray-400">Gasless swaps on Ethereum & Arbitrum</p>
+                  <p className="text-xs text-gray-400">Direct & Relayer swaps on Ethereum & Arbitrum</p>
                 </div>
               </div>
               <div className="flex items-center gap-4">
@@ -651,8 +499,8 @@ export default function SwapPage() {
                   </h2>
                 </div>
                 <p className="text-xl text-gray-300 mb-12 max-w-lg mx-auto">
-                  Swap tokens on Ethereum & Arbitrum without owning ETH.
-                  We handle all the gas fees for you!
+                  Swap tokens on Ethereum & Arbitrum with direct Uniswap integration
+                  or use our relayer service for USDC to ETH swaps!
                 </p>
                 <div className="inline-flex p-1 bg-gradient-to-r from-blue-500 to-purple-500 rounded-xl">
                   <div className="bg-slate-900 rounded-lg px-1 py-1">
@@ -684,64 +532,82 @@ export default function SwapPage() {
                 <div className="flex items-center justify-between mb-6">
                   <h3 className="text-2xl font-bold text-white">Swap Tokens</h3>
                   <div className="flex items-center gap-4">
-                    <select
-                      value={selectedChain}
-                      onChange={async (e) => {
-                        const newChain = e.target.value as SwapSupportedChain;
-                        console.log('Chain selected:', newChain);
-                        
-                        try {
-                          // Switch network in wallet
-                          const chainConfig = swapChains[newChain];
-                          const ethereum = (window as any).ethereum;
-                          
-                          if (ethereum) {
-                            await ethereum.request({
-                              method: 'wallet_switchEthereumChain',
-                              params: [{ chainId: `0x${chainConfig.chain.id.toString(16)}` }],
-                            }).catch(async (switchError: any) => {
-                              // This error code indicates that the chain has not been added to MetaMask.
-                              if (switchError.code === 4902) {
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setSwapMode('direct')}
+                        className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${
+                          swapMode === 'direct'
+                            ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white'
+                            : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                        }`}
+                        title="Direct swap through Uniswap V3"
+                      >
+                        Direct
+                      </button>
+                      <button
+                        onClick={() => setSwapMode('relayer')}
+                        className={`px-3 py-1 rounded-lg text-sm font-medium transition-all ${
+                          swapMode === 'relayer'
+                            ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white'
+                            : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                        }`}
+                        title="Swap USDC to ETH via relayer (0.5% fee)"
+                      >
+                        Relayer
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      {Object.entries(swapChains).map(([chainId, chain]) => (
+                        <button
+                          key={chainId}
+                          onClick={async () => {
+                            try {
+                              const ethereum = (window as any).ethereum;
+                              if (ethereum) {
                                 await ethereum.request({
-                                  method: 'wallet_addEthereumChain',
-                                  params: [{
-                                    chainId: `0x${chainConfig.chain.id.toString(16)}`,
-                                    chainName: chainConfig.name,
-                                    rpcUrls: [chainConfig.chain.rpcUrls.default.http[0]],
-                                    nativeCurrency: chainConfig.chain.nativeCurrency,
-                                    blockExplorerUrls: [chainConfig.chain.blockExplorers?.default.url],
-                                  }],
+                                  method: 'wallet_switchEthereumChain',
+                                  params: [{ chainId: `0x${chain.chain.id.toString(16)}` }],
+                                }).catch(async (switchError: any) => {
+                                  if (switchError.code === 4902) {
+                                    await ethereum.request({
+                                      method: 'wallet_addEthereumChain',
+                                      params: [{
+                                        chainId: `0x${chain.chain.id.toString(16)}`,
+                                        chainName: chain.name,
+                                        rpcUrls: [chain.chain.rpcUrls.default.http[0]],
+                                        nativeCurrency: chain.chain.nativeCurrency,
+                                        blockExplorerUrls: [chain.chain.blockExplorers?.default.url],
+                                      }],
+                                    });
+                                  } else {
+                                    throw switchError;
+                                  }
                                 });
-                              } else {
-                                throw switchError;
                               }
-                            });
-                          }
 
-                          setSelectedChain(newChain);
-                          // Reset states when changing networks
-                          // Reset form
-                          setAmount('');
-                          setNeedsApproval(false);
-                          setCheckingApproval(false);
-                          
-                          // Update ETH balance for new network
-                          if (address && isConnected) {
-                            checkETHBalance();
-                          }
-                        } catch (error: any) {
-                          console.error('Failed to switch network:', error);
-                          toast.error(error.message || 'Failed to switch network');
-                        }
-                      }}
-                      className="px-3 py-1 bg-white/10 rounded-xl border border-white/20 text-white text-sm focus:outline-none focus:border-purple-500"
-                    >
-                      <option value="eth-sepolia" className="bg-slate-900">Ethereum Sepolia</option>
-                      <option value="arb-sepolia" className="bg-slate-900">Arbitrum Sepolia</option>
-                    </select>
-                    <div className="flex items-center gap-2 px-3 py-1 bg-green-500/20 rounded-full border border-green-500/50">
-                      <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                      <span className="text-xs text-green-400 font-medium">Gasless Active</span>
+                              setSelectedChain(chainId as SwapSupportedChain);
+                              setAmount('');
+                              setNeedsApproval(false);
+                              setCheckingApproval(false);
+                              
+                              if (address && isConnected) {
+                                checkETHBalance();
+                              }
+                            } catch (error: any) {
+                              console.error('Failed to switch network:', error);
+                              toast.error(error.message || 'Failed to switch network');
+                            }
+                          }}
+                          className={`px-4 py-2 rounded-xl transition-all font-semibold flex items-center gap-2 ${
+                            selectedChain === chainId
+                              ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-lg'
+                              : 'bg-white/10 hover:bg-white/20 text-gray-300'
+                          }`}
+                        >
+                          <span>{chain.icon}</span>
+                          <span>{chain.name}</span>
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -903,7 +769,9 @@ export default function SwapPage() {
 
                 {/* Swap Button */}
                 <button
-                  onClick={needsApproval ? approveToken : handleSwap}
+                  onClick={needsApproval ? approveToken : (
+                    swapMode === 'direct' ? handleDirectSwap : handleRelayerSwap
+                  )}
                   disabled={loading || !amount || checkingApproval || !isConnected}
                   className="w-full mt-6 py-5 bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-400 hover:to-purple-400 rounded-xl font-bold text-lg text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg disabled:shadow-none"
                 >
@@ -929,7 +797,9 @@ export default function SwapPage() {
                   ) : (
                     <span className="flex items-center justify-center gap-2">
                       <span>Swap {amount} {fromToken}</span>
-                      <span className="px-2 py-1 bg-white/20 rounded-lg text-sm">No ETH Required</span>
+                      {swapMode === 'relayer' && (
+                        <span className="px-2 py-1 bg-white/20 rounded-lg text-sm">0.5% Fee</span>
+                      )}
                     </span>
                   )}
                 </button>
@@ -937,17 +807,29 @@ export default function SwapPage() {
                 {/* Info Box */}
                 <div className="mt-6 p-4 bg-gradient-to-r from-blue-500/10 to-purple-500/10 rounded-xl border border-white/10">
                   <h4 className="text-sm font-semibold text-white mb-2 flex items-center gap-2">
-                    <span className="text-lg">✨</span>
-                    How Gasless Swaps Work
+                    <span className="text-lg">{swapMode === 'direct' ? '⚡' : '🔄'}</span>
+                    {swapMode === 'direct' ? 'Direct Swap' : 'Relayer Swap'}
                   </h4>
-                  <ol className="text-xs text-gray-300 space-y-1">
-                    <li>1️⃣ Select tokens and amount</li>
-                    <li>2️⃣ Sign message to approve swap (free)</li>
-                    <li>3️⃣ Our relayers execute the swap</li>
-                    <li>4️⃣ Small fee taken from output token</li>
-                  </ol>
-                  <p className="text-xs text-green-400 mt-2 font-semibold">
-                    No ETH needed - we cover all gas fees! 🎉
+                  {swapMode === 'direct' ? (
+                    <ol className="text-xs text-gray-300 space-y-1">
+                      <li>1️⃣ Direct interaction with Uniswap V3</li>
+                      <li>2️⃣ Best rates and minimal slippage</li>
+                      <li>3️⃣ You pay gas fees in ETH</li>
+                      <li>4️⃣ Fastest execution</li>
+                    </ol>
+                  ) : (
+                    <ol className="text-xs text-gray-300 space-y-1">
+                      <li>1️⃣ Relayer executes swap for you</li>
+                      <li>2️⃣ Only works for USDC → ETH swaps</li>
+                      <li>3️⃣ 0.5% fee taken from output</li>
+                      <li>4️⃣ No ETH needed for gas</li>
+                    </ol>
+                  )}
+                  <p className="text-xs text-blue-400 mt-2 font-semibold">
+                    {swapMode === 'direct' 
+                      ? 'Best for users with ETH for gas 💎' 
+                      : 'Perfect for users without ETH! 🎉'
+                    }
                   </p>
                 </div>
               </div>
@@ -955,12 +837,12 @@ export default function SwapPage() {
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-4 mt-8">
-              <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/10 backdrop-blur-md rounded-xl p-5 border border-green-500/20">
-                <p className="text-3xl font-bold text-green-400">$0</p>
-                <p className="text-xs text-gray-300 mt-1">ETH Required</p>
-              </div>
               <div className="bg-gradient-to-r from-blue-500/10 to-cyan-500/10 backdrop-blur-md rounded-xl p-5 border border-blue-500/20">
-                <p className="text-3xl font-bold text-blue-400">0.5%</p>
+                <p className="text-3xl font-bold text-blue-400">2</p>
+                <p className="text-xs text-gray-300 mt-1">Swap Modes</p>
+              </div>
+              <div className="bg-gradient-to-r from-green-500/10 to-emerald-500/10 backdrop-blur-md rounded-xl p-5 border border-green-500/20">
+                <p className="text-3xl font-bold text-green-400">0.5%</p>
                 <p className="text-xs text-gray-300 mt-1">Max Slippage</p>
               </div>
               <div className="bg-gradient-to-r from-purple-500/10 to-pink-500/10 backdrop-blur-md rounded-xl p-5 border border-purple-500/20">

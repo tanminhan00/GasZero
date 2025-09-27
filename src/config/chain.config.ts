@@ -56,7 +56,7 @@ export const DEX_CONFIG = {
     ROUTER_ADDRESS: NETWORKS['eth-sepolia'].routerAddress,
     TOKENS: {
       ETH: {
-        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',  // Sepolia WETH
+        address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',  // Sepolia WETH
         decimals: 18,
         symbol: 'ETH',
         icon: '⚡'
@@ -74,7 +74,7 @@ export const DEX_CONFIG = {
     ROUTER_ADDRESS: NETWORKS['arb-sepolia'].routerAddress,
     TOKENS: {
       ETH: {
-        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',  // Arbitrum Sepolia WETH
+        address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',  // Arbitrum Sepolia WETH
         decimals: 18,
         symbol: 'ETH',
         icon: '⚡'

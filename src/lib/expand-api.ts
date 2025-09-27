@@ -27,32 +27,6 @@ export interface TokenBalance {
   tokenSymbol: string;
 }
 
-export interface SwapWithApprovalParams {
-  dexId: string;
-  amountIn: string;
-  amountOutMin: string;
-  path: string[];
-  to: string;
-  deadline: string;
-  from: string;
-  gas?: string;
-}
-
-export interface SwapWithApprovalResponse {
-  status: number;
-  msg: string;
-  data: {
-    chainId: string;
-    from: string;
-    to: string;
-    value: string;
-    gas: string;
-    data: string;
-    nonce: number;
-    referenceId: string;
-  }[];
-}
-
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
   // Check if we're in a browser environment
   if (typeof window === 'undefined') {
@@ -88,62 +62,21 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
   };
 
   try {
-    // Log request details
-    console.log('Making API request:', {
-      url,
-      method: requestOptions.method || 'GET',
-      headers: Array.from(headers.entries()).reduce((acc, [key, value]) => ({
-        ...acc,
-        [key]: key === 'x-api-key' ? '[HIDDEN]' : value
-      }), {}),
-      body: requestOptions.body ? JSON.parse(requestOptions.body as string) : undefined,
-    });
-
     // Make the request
     const response = await fetch(url, requestOptions);
-    console.log('Response status:', response.status);
 
-    // Get response text first
+    // Get response text and parse as JSON
     const responseText = await response.text();
-    console.log('Raw response:', responseText);
-
-    // Try to parse as JSON
-    let responseData;
-    try {
-      responseData = responseText ? JSON.parse(responseText) : null;
-    } catch (e) {
-      console.error('Failed to parse response as JSON:', responseText);
-      throw new Error(`Invalid JSON response from API: ${responseText}`);
-    }
+    const responseData = responseText ? JSON.parse(responseText) : null;
 
     // Check for error responses
     if (!response.ok) {
-      console.error('API Error Response:', {
-        status: response.status,
-        statusText: response.statusText,
-        data: responseData
-      });
       throw new Error(`API Error (${response.status}): ${JSON.stringify(responseData)}`);
     }
-
-    // Return successful response
-    console.log('API Response:', responseData);
     return responseData;
   } catch (error) {
-    // Log detailed error information
-    console.error('Fetch error:', {
-      error,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : undefined,
-      url,
-      options: {
-        ...requestOptions,
-        headers: Array.from(headers.entries()).reduce((acc, [key, value]) => ({
-          ...acc,
-          [key]: key === 'x-api-key' ? '[HIDDEN]' : value
-        }), {})
-      }
-    });
+    // Log error message
+    console.error('Fetch error:', error instanceof Error ? error.message : 'Unknown error');
 
     // Re-throw with more context
     if (error instanceof Error) {
@@ -186,13 +119,6 @@ export async function getTokenBalance(params: {
   return fetchWithAuth(
     `${EXPAND_API_URL}/chain/getbalance?${queryParams}`
   );
-}
-
-export async function swapWithApproval(params: SwapWithApprovalParams): Promise<SwapWithApprovalResponse> {
-  return fetchWithAuth(`${EXPAND_API_URL}/dex/swapwithapproval`, {
-    method: 'POST',
-    body: JSON.stringify(params),
-  });
 }
 
 export interface UserBalanceResponse {
