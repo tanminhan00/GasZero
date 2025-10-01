@@ -1,0 +1,7 @@
+{
+  "relayerAddresses": {
+    "arb-sepolia": "0x77d4C017fAA44Ff6f96e2877b45Befd233D0ef65",
+    "base-sepolia": "0x7337d8b9E84B0C9f88316439AfFaE9eE99b6C3C1",
+    "eth-sepolia": "0x77d4C017fAA44Ff6f96e2877b45Befd233D0ef65"
+  }
+}
