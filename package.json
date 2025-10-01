@@ -5,7 +5,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "setup": "node scripts/setup-relayers.js",
+    "check": "node scripts/check-setup.js",
+    "test-gas": "node scripts/test-gas-calculation.js",
+    "debug": "node scripts/debug-balance.js"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.8",
