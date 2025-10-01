@@ -55,6 +55,7 @@ export const DEX_CONFIG = {
   'eth-sepolia': {
     ROUTER_ADDRESS: NETWORKS['eth-sepolia'].routerAddress,
     QUOTER_ADDRESS: '0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3', // Quoter V2
+    FACTORY_ADDRESS: '0x0227628f3F023bb0B980b67D528571c95c6DaC1c', // Factory
     TOKENS: {
       ETH: {
         address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',  // Sepolia WETH

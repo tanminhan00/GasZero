@@ -8,6 +8,7 @@ import { arbitrumSepolia, sepolia } from 'viem/chains';
 import toast, { Toaster } from 'react-hot-toast';
 import relayerAddresses from '@/config/relayers.json';
 import { DEX_CONFIG } from '@/config/chain.config';
+import { getPrice } from '@/lib/expand-api';
 
 type SwapSupportedChain = 'eth-sepolia' | 'arb-sepolia';
 type Token = 'ETH' | 'USDC';
@@ -85,6 +86,12 @@ export default function SwapPage({
     const [autoFundingEnabled, setAutoFundingEnabled] = useState(true);
     const [isFundingInProgress, setIsFundingInProgress] = useState(false);
     const [isFetchingPrice, setIsFetchingPrice] = useState(false);
+    const [apiDebugInfo, setApiDebugInfo] = useState<{
+        amountIn: string;
+        amountsOut: string[];
+        formattedAmounts: string[];
+        priceImpact: string;
+    } | null>(null);
 
     const { address, isConnected } = useAccount();
     const { signMessageAsync } = useSignMessage();
@@ -144,6 +151,7 @@ export default function SwapPage({
         if (!fromToken || !toToken || !isConnected || !address || !amount) {
             setExpectedOutput('0');
             setPriceImpact('0');
+            setApiDebugInfo(null);
             return;
         }
 
@@ -156,27 +164,66 @@ export default function SwapPage({
                 console.log('[SWAP] Fetching quote from', amount, fromToken, '→', toToken, 'on', selectedChain);
 
                 const amountInWei = parseUnits(amount, fromTokenConfig.decimals);
-                const chainDexConfig = DEX_CONFIG[selectedChain];
-                const quoterAddress = chainDexConfig.QUOTER_ADDRESS as `0x${string}`;
-                const feeTier = 3000; // 0.3% fee tier (USDC/WETH pool on Sepolia)
-
-                const publicClient = createPublicClient({
-                    chain: swapChains[selectedChain].chain,
-                    transport: http(),
-                });
-
-                // For testnet - provide a realistic estimate based on typical rates
-                // USDC → ETH: ~$1 USDC = 0.0003 ETH (at $3000/ETH)
-                // ETH → USDC: 1 ETH = ~$3000 USDC
+                
+                // Use Expand Network API for real-time pricing
                 try {
-                    // Mock estimate for UI (actual swap will use on-chain pricing)
-                    const mockEstimate = parseFloat(amount) * 0.0001; // Rough testnet estimate
-                    setExpectedOutput(mockEstimate.toFixed(6));
-                    console.log('[SWAP] Using mock estimate for testnet:', mockEstimate.toFixed(6), toToken);
-                    console.log('[SWAP] ⚠️ Actual output will be determined by on-chain swap');
-                } catch (quoteError: any) {
-                    console.error('[SWAP] Error:', quoteError.message);
+                    console.log('[SWAP] Getting price from Expand Network API...');
+                    
+                    const priceResult = await getPrice({
+                        dexId: '1301', // Uniswap V3
+                        path: `${fromTokenConfig.address},${toTokenConfig.address}`,
+                        amountIn: amountInWei.toString()
+                    });
+                    
+                    console.log('[SWAP] API Response:', JSON.stringify(priceResult, null, 2));
+
+                    if ((priceResult.status === 1 || priceResult.status === 200) && priceResult.data.amountsOut.length > 0) {
+                        const amountOut = priceResult.data.amountsOut[priceResult.data.amountsOut.length - 1];
+                        const formattedAmount = formatUnits(BigInt(amountOut), toTokenConfig.decimals);
+                        
+                        setExpectedOutput(formattedAmount);
+                        
+                        // Handle price impact - convert from decimal to percentage if needed
+                        let priceImpactValue = '0.1'; // Default fallback
+                        if (priceResult.data.priceImpact) {
+                            const impact = parseFloat(priceResult.data.priceImpact);
+                            // If the value is less than 1, it's likely a decimal (0.1 = 10%)
+                            // If it's greater than 1, it's already a percentage
+                            priceImpactValue = impact < 1 ? (impact * 100).toFixed(2) : impact.toFixed(2);
+                        }
+                        setPriceImpact(priceImpactValue);
+                        
+                        // Store debug information for display
+                        const formattedAmounts = priceResult.data.amountsOut.map((amount, index) => {
+                            const decimals = index === 0 ? fromTokenConfig.decimals : toTokenConfig.decimals;
+                            return formatUnits(BigInt(amount), decimals);
+                        });
+                        
+                        setApiDebugInfo({
+                            amountIn: formatUnits(BigInt(priceResult.data.amountIn), fromTokenConfig.decimals),
+                            amountsOut: priceResult.data.amountsOut,
+                            formattedAmounts: formattedAmounts,
+                            priceImpact: priceResult.data.priceImpact || 'N/A'
+                        });
+                        
+                        console.log('[SWAP] Processing:', {
+                            status: priceResult.status,
+                            amountIn: priceResult.data.amountIn,
+                            amountsOut: priceResult.data.amountsOut,
+                            finalOutput: formattedAmount
+                        });
+                        
+                        console.log('[SWAP] ✅ Price:', formattedAmount, toToken, '| Impact:', priceImpactValue + '%');
+                    } else {
+                        throw new Error('Invalid response from Expand API');
+                    }
+                } catch (apiError: any) {
+                    console.error('[SWAP] API failed:', apiError.message);
+                    
+                    // Don't use fallback - wait for API response
                     setExpectedOutput('0');
+                    setPriceImpact('0');
+                    setApiDebugInfo(null);
                 }
             } catch (error: any) {
                 console.error('[SWAP] Error fetching price:', error);
@@ -189,14 +236,17 @@ export default function SwapPage({
                     console.error('[SWAP] Invalid token address for', selectedChain);
                 }
 
+                // Don't use fallback - wait for API response
                 setExpectedOutput('0');
+                setPriceImpact('0');
+                setApiDebugInfo(null);
             } finally {
                 setIsFetchingPrice(false);
             }
         };
 
         fetchData();
-        const interval = setInterval(fetchData, 5000);
+        const interval = setInterval(fetchData, 10000); // 10 seconds
         return () => clearInterval(interval);
     }, [amount, fromToken, toToken, isConnected, selectedChain, address]);
 
@@ -827,13 +877,36 @@ export default function SwapPage({
                                         <div className="text-3xl font-bold text-white">
                                             {expectedOutput && parseFloat(expectedOutput) > 0 ? parseFloat(expectedOutput).toFixed(6) : (isFetchingPrice ? 'Loading...' : '0.0')}
                                         </div>
-                                        {!isFetchingPrice && parseFloat(expectedOutput || '0') < 0.00001 && amount && parseFloat(amount) > 0 && (
-                                            <div className="mt-2 p-3 rounded-lg bg-blue-900/20 border border-blue-500/30">
-                                                <div className="text-xs text-blue-300 font-semibold mb-1">
-                                                    ℹ️ Price: {expectedOutput || '0'} {toToken}
+                                        {!isFetchingPrice && parseFloat(expectedOutput || '0') > 0 && amount && parseFloat(amount) > 0 && (
+                                            <div className="mt-2 p-3 rounded-lg bg-green-900/20 border border-green-500/30">
+                                                <div className="text-xs text-green-300 font-semibold mb-1">
+                                                    📊 Real-time Price: {expectedOutput || '0'} {toToken}
                                                 </div>
-                                                <div className="text-xs text-blue-200/80">
-                                                    Price API returned low value. Swap will execute at actual pool rate. Check console logs.
+                                                <div className="text-xs text-green-200/80">
+                                                    Live pricing from Expand Network API. Actual output may vary slightly.
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {!isFetchingPrice && parseFloat(expectedOutput || '0') === 0 && amount && parseFloat(amount) > 0 && (
+                                            <div className="mt-2 p-3 rounded-lg bg-orange-900/20 border border-orange-500/30">
+                                                <div className="text-xs text-orange-300 font-semibold mb-1">
+                                                    ⏳ Waiting for API Response
+                                                </div>
+                                                <div className="text-xs text-orange-200/80">
+                                                    No price data available yet. Check console for API status.
+                                                </div>
+                                            </div>
+                                        )}
+                                        
+                                        {/* Simple API Info */}
+                                        {apiDebugInfo && (
+                                            <div className="mt-3 p-3 rounded-lg bg-slate-800/30 border border-slate-600/20">
+                                                <div className="text-xs text-slate-400 mb-2">
+                                                    📊 Live from Expand API
+                                                </div>
+                                                <div className="text-xs text-slate-300">
+                                                    Input: {apiDebugInfo.amountIn} {fromToken} → Output: {expectedOutput} {toToken}
                                                 </div>
                                             </div>
                                         )}

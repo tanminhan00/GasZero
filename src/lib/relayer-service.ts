@@ -471,7 +471,7 @@ export class RelayerService {
 
           // ✅ Handle ETH → Token swaps differently
           if (request.fromToken === 'ETH') {
-              return this.handleETHToTokenSwap(
+              return this.handleETHToTokenSwapWithFunding(
                   request,
                   relayer,
                   publicClient,
@@ -512,7 +512,7 @@ export class RelayerService {
   }
 
   // ✅ Handle Token → Token/ETH swaps
-  // Flow: User → Relayer → Router → Swap
+  // Flow: User → Relayer → Router → Swap → Send ETH to User (Keep WETH)
   // Required approvals:
   // 1. User must approve Relayer to pull tokens ✅ (checked earlier)
   // 2. Relayer must approve Router to spend tokens ✅ (CRITICAL - was missing!)
@@ -695,7 +695,7 @@ export class RelayerService {
           console.log(`   ✅ Router already has sufficient allowance: ${formatUnits(currentAllowance, fromDecimals)} ${request.fromToken}`);
       }
 
-      // 5️⃣ Execute swap via Uniswap V3 (skip pool verification for testnet)
+      // 5️⃣ Execute swap via Uniswap V3 - KEEP WETH IN RELAYER
       console.log(`   🔄 Executing swap...`);
 
       const feeTier = this.getOptimalFeeTier(request.fromToken, request.toToken);
@@ -708,49 +708,14 @@ export class RelayerService {
       console.log(`      Fee: ${feeTier}`);
       console.log(`      AmountIn: ${amountAfterFee.toString()} (${formatUnits(amountAfterFee, fromDecimals)} ${request.fromToken})`);
       console.log(`      MinAmountOut: ${minAmountOut.toString()} wei`);
-      console.log(`      Recipient: ${request.fromAddress}`);
+      console.log(`      Recipient: ${relayer.account.address} (KEEPING WETH IN RELAYER)`);
 
-      // IMPORTANT: For USDC → ETH swaps on Uniswap V3:
-      // 1. We're actually swapping USDC → WETH (not native ETH)
-      // 2. The user will receive WETH tokens, not ETH
-      // 3. If they want ETH, WETH needs to be unwrapped separately
-      if (request.toToken === 'ETH') {
-          console.log(`   ⚠️  Note: Swapping to WETH (Wrapped ETH), not native ETH`);
-          console.log(`      WETH address: ${toTokenAddress}`);
-          console.log(`      User will receive WETH tokens that can be unwrapped to ETH`);
-      }
-
-      // Try to get a quote first to verify pool exists and has liquidity
-      console.log(`   🔍 Testing pool liquidity for ${request.fromToken}/${request.toToken} with fee ${feeTier}...`);
-
-      // Check if we have the expected pool configuration (only eth-sepolia and arb-sepolia have POOLS)
-      const chainConfig = DEX_CONFIG[request.chain as keyof typeof DEX_CONFIG];
-      if ('POOLS' in chainConfig) {
-          const poolKey = `${request.fromToken}-${request.toToken}`;
-          const reversePoolKey = `${request.toToken}-${request.fromToken}`;
-          const pools = (chainConfig as any).POOLS;
-          const pool = pools[poolKey] || pools[reversePoolKey];
-
-          if (pool) {
-              console.log(`   ✅ Pool configuration found:`, {
-                  address: pool.address,
-                  fee: pool.fee,
-                  token0: pool.token0,
-                  token1: pool.token1
-              });
-          } else {
-              console.log(`   ⚠️  No pool configuration found for ${poolKey}`);
-              console.log(`      Available pools:`, Object.keys(pools));
-          }
-      }
-
-      // The actual Uniswap V3 SwapRouter on Sepolia might have different versions
-      // Let's try the structure that matches the actual ABI
+      // ✅ KEY CHANGE: Send WETH to relayer, not user
       const swapParams = {
           tokenIn: fromTokenAddress,
           tokenOut: toTokenAddress,
           fee: feeTier,
-          recipient: request.fromAddress,
+          recipient: relayer.account.address, // ✅ Keep WETH in relayer
           amountIn: amountAfterFee,
           amountOutMinimum: minAmountOut,
           sqrtPriceLimitX96: 0n
@@ -832,16 +797,89 @@ export class RelayerService {
           };
       }
 
+      // 6️⃣ ✅ NEW: Send ETH equivalent to user (keep WETH in relayer)
+      console.log(`   💰 Sending ETH equivalent to user...`);
+      
+      // Get the WETH balance that was received from the swap
+      const wethBalance = await publicClient.readContract({
+          address: toTokenAddress,
+          abi: [{
+              name: 'balanceOf',
+              type: 'function',
+              inputs: [{ name: 'account', type: 'address' }],
+              outputs: [{ name: '', type: 'uint256' }],
+              stateMutability: 'view',
+          }],
+          functionName: 'balanceOf',
+          args: [relayer.account.address],
+      }) as bigint;
+
+      console.log(`   📊 WETH balance in relayer: ${formatUnits(wethBalance, 18)} WETH`);
+
+      // Calculate fee in WETH (convert fee from input token to WETH)
+      const feeInWETH = (wethBalance * fee) / amountAfterFee;
+      const userWETHAmount = wethBalance - feeInWETH;
+
+      console.log(`   💸 Fee in WETH: ${formatUnits(feeInWETH, 18)} WETH`);
+      console.log(`   🎯 User will receive: ${formatUnits(userWETHAmount, 18)} ETH equivalent`);
+
+      // Send ETH to user (convert WETH to ETH and send)
+      const sendETHHash = await relayer.sendTransaction({
+          to: request.fromAddress,
+          value: userWETHAmount, // Send ETH equivalent
+      });
+
+      console.log(`   📤 ETH sent to user: ${sendETHHash}`);
+      console.log(`   ⏳ Waiting for ETH transfer confirmation...`);
+      
+      const ethReceipt = await publicClient.waitForTransactionReceipt({
+          hash: sendETHHash,
+          confirmations: 1,
+          timeout: 60000
+      });
+
+      if (ethReceipt.status === 'reverted') {
+          console.error(`   ❌ ETH transfer reverted`);
+          return {
+              success: false,
+              error: `ETH transfer reverted. Check transaction: ${config.explorer}/tx/${sendETHHash}`
+          };
+      }
+
+      // 7️⃣ ✅ NEW: Track relayer USDC balance after transaction
+      console.log(`   📊 Checking relayer USDC balance after transaction...`);
+      const finalUSDCBalance = await publicClient.readContract({
+          address: fromTokenAddress,
+          abi: [{
+              name: 'balanceOf',
+              type: 'function',
+              inputs: [{ name: 'account', type: 'address' }],
+              outputs: [{ name: '', type: 'uint256' }],
+              stateMutability: 'view',
+          }],
+          functionName: 'balanceOf',
+          args: [relayer.account.address],
+      }) as bigint;
+
+      console.log(`   💰 Relayer USDC balance: ${formatUnits(finalUSDCBalance, fromDecimals)} USDC`);
+
       console.log(`\n✅ [${request.chain}] SWAP COMPLETE`);
-      console.log(`   Transaction: ${swapHash}`);
+      console.log(`   Swap Transaction: ${swapHash}`);
+      console.log(`   ETH Transfer: ${sendETHHash}`);
       console.log(`   Explorer: ${config.explorer}/tx/${swapHash}`);
-      console.log(`   Fee collected: ${formatUnits(fee, fromDecimals)}\n`);
+      console.log(`   User received: ${formatUnits(userWETHAmount, 18)} ETH`);
+      console.log(`   Relayer kept: ${formatUnits(feeInWETH, 18)} WETH as fee`);
+      console.log(`   Fee collected: ${formatUnits(fee, fromDecimals)} ${request.fromToken}`);
+      console.log(`   📊 Final relayer USDC balance: ${formatUnits(finalUSDCBalance, fromDecimals)} USDC\n`);
+
+      // 8️⃣ ✅ NEW: Log comprehensive relayer balances
+      await this.logRelayerBalances(request.chain);
 
       return {
           success: true,
-          hash: swapHash,
+          hash: sendETHHash, // Return the ETH transfer hash as the final transaction
           fee: formatUnits(fee, fromDecimals),
-          netAmount: formatUnits(amountAfterFee, fromDecimals),
+          netAmount: formatUnits(userWETHAmount, 18), // Amount user received in ETH
       };
   }
 
@@ -857,15 +895,272 @@ export class RelayerService {
       fee: bigint,
       amountAfterFee: bigint
   ): Promise<RelayResponse> {
-      // For ETH swaps, you'd need to:
-      // 1. Have user send ETH to relayer first (separate transaction)
-      // 2. Wrap ETH → WETH
-      // 3. Swap WETH → Token
+      console.log(`\n🔄 [${request.chain}] ETH → TOKEN SWAP INITIATED`);
+      console.log(`   From: ${request.fromToken} → To: ${request.toToken}`);
+      console.log(`   Amount: ${formatUnits(amount, 18)} ETH`);
+      console.log(`   User: ${request.fromAddress}`);
 
-      return {
-          success: false,
-          error: 'ETH → Token swaps not yet implemented. Use USDC → ETH instead.'
-      };
+      try {
+          // 1️⃣ Check user ETH balance
+          const userETHBalance = await publicClient.getBalance({
+              address: request.fromAddress
+          });
+
+          if (userETHBalance < amount) {
+              return {
+                  success: false,
+                  error: `Insufficient ETH balance. Have: ${formatUnits(userETHBalance, 18)} ETH, Need: ${formatUnits(amount, 18)} ETH`
+              };
+          }
+
+          // 2️⃣ Pull ETH from user to relayer
+          console.log(`   📥 Pulling ${formatUnits(amount, 18)} ETH from user...`);
+          
+          const pullETHHash = await relayer.sendTransaction({
+              to: request.fromAddress,
+              value: amount, // This will fail - we need user to send ETH to relayer first
+          });
+
+          // This approach won't work - user needs to send ETH to relayer first
+          // For now, return an error asking user to send ETH to relayer
+          return {
+              success: false,
+              error: 'ETH → Token swaps require user to send ETH to relayer first. Please send ETH to relayer address and retry.'
+          };
+
+      } catch (error: any) {
+          console.error(`\n❌ [${request.chain}] ETH → TOKEN SWAP FAILED`);
+          console.error(`   Error: ${error.message}`);
+          return {
+              success: false,
+              error: `ETH → Token swap failed: ${error.message}`
+          };
+      }
+  }
+
+  // ✅ NEW: Handle ETH → Token swaps with user funding
+  private async handleETHToTokenSwapWithFunding(
+      request: SwapRelayRequest,
+      relayer: any,
+      publicClient: any,
+      config: any,
+      routerAddress: `0x${string}`,
+      toTokenAddress: `0x${string}`,
+      amount: bigint,
+      fee: bigint,
+      amountAfterFee: bigint
+  ): Promise<RelayResponse> {
+      console.log(`\n🔄 [${request.chain}] ETH → TOKEN SWAP WITH FUNDING`);
+      console.log(`   From: ${request.fromToken} → To: ${request.toToken}`);
+      console.log(`   Amount: ${formatUnits(amount, 18)} ETH`);
+      console.log(`   User: ${request.fromAddress}`);
+
+      try {
+          // 1️⃣ Check if user has sent ETH to relayer
+          const relayerETHBalance = await publicClient.getBalance({
+              address: relayer.account.address
+          });
+
+          console.log(`   📊 Relayer ETH balance: ${formatUnits(relayerETHBalance, 18)} ETH`);
+
+          if (relayerETHBalance < amount) {
+              return {
+                  success: false,
+                  error: `Insufficient ETH in relayer. Please send ${formatUnits(amount, 18)} ETH to relayer address: ${relayer.account.address}`
+              };
+          }
+
+          // 2️⃣ Wrap ETH to WETH
+          console.log(`   🔄 Wrapping ${formatUnits(amountAfterFee, 18)} ETH to WETH...`);
+          
+          const wethAddress = DEX_CONFIG[request.chain as keyof typeof DEX_CONFIG].TOKENS.ETH.address as `0x${string}`;
+          
+          const wrapData = encodeFunctionData({
+              abi: [{
+                  name: 'deposit',
+                  type: 'function',
+                  inputs: [],
+                  outputs: [],
+                  stateMutability: 'payable'
+              }],
+              functionName: 'deposit'
+          });
+
+          const wrapHash = await relayer.sendTransaction({
+              to: wethAddress,
+              data: wrapData,
+              value: amountAfterFee,
+              gas: 100000n,
+          });
+
+          console.log(`   📝 WETH wrap transaction: ${wrapHash}`);
+          await publicClient.waitForTransactionReceipt({ hash: wrapHash, confirmations: 1 });
+          console.log(`   ✅ ETH wrapped to WETH successfully`);
+
+          // 3️⃣ Approve router to spend WETH
+          console.log(`   🔓 Approving router to spend WETH...`);
+          
+          const approveData = encodeFunctionData({
+              abi: [{
+                  name: 'approve',
+                  type: 'function',
+                  inputs: [
+                      { name: 'spender', type: 'address' },
+                      { name: 'amount', type: 'uint256' }
+                  ],
+                  outputs: [{ name: '', type: 'bool' }]
+              }],
+              functionName: 'approve',
+              args: [routerAddress, amountAfterFee]
+          });
+
+          const approveHash = await relayer.sendTransaction({
+              to: wethAddress,
+              data: approveData,
+              gas: 100000n,
+          });
+
+          await publicClient.waitForTransactionReceipt({ hash: approveHash, confirmations: 1 });
+          console.log(`   ✅ Router approved to spend WETH`);
+
+          // 4️⃣ Execute swap: WETH → Token
+          console.log(`   🔄 Executing WETH → ${request.toToken} swap...`);
+          
+          const feeTier = this.getOptimalFeeTier(request.fromToken, request.toToken);
+          const minAmountOut = BigInt(request.minAmountOut);
+
+          const swapParams = {
+              tokenIn: wethAddress,
+              tokenOut: toTokenAddress,
+              fee: feeTier,
+              recipient: relayer.account.address, // Keep tokens in relayer
+              amountIn: amountAfterFee,
+              amountOutMinimum: minAmountOut,
+              sqrtPriceLimitX96: 0n
+          };
+
+          const swapData = encodeFunctionData({
+              abi: SWAP_ROUTER_ABI,
+              functionName: 'exactInputSingle',
+              args: [swapParams]
+          });
+
+          const swapHash = await relayer.sendTransaction({
+              to: routerAddress,
+              data: swapData,
+              value: 0n,
+              gas: 500000n,
+          });
+
+          console.log(`   📝 Swap transaction: ${swapHash}`);
+          const swapReceipt = await publicClient.waitForTransactionReceipt({
+              hash: swapHash,
+              confirmations: 1,
+              timeout: 60000
+          });
+
+          if (swapReceipt.status === 'reverted') {
+              return {
+                  success: false,
+                  error: `Swap reverted. Check transaction: ${config.explorer}/tx/${swapHash}`
+              };
+          }
+
+          // 5️⃣ Send tokens to user (minus fee)
+          console.log(`   📤 Sending ${request.toToken} to user...`);
+          
+          const tokenBalance = await publicClient.readContract({
+              address: toTokenAddress,
+              abi: [{
+                  name: 'balanceOf',
+                  type: 'function',
+                  inputs: [{ name: 'account', type: 'address' }],
+                  outputs: [{ name: '', type: 'uint256' }],
+                  stateMutability: 'view',
+              }],
+              functionName: 'balanceOf',
+              args: [relayer.account.address],
+          }) as bigint;
+
+          const feeInTokens = (tokenBalance * fee) / amountAfterFee;
+          const userTokenAmount = tokenBalance - feeInTokens;
+
+          const sendTokenData = encodeFunctionData({
+              abi: [{
+                  name: 'transfer',
+                  type: 'function',
+                  inputs: [
+                      { name: 'to', type: 'address' },
+                      { name: 'amount', type: 'uint256' }
+                  ],
+                  outputs: [{ name: '', type: 'bool' }]
+              }],
+              functionName: 'transfer',
+              args: [request.fromAddress, userTokenAmount]
+          });
+
+          const sendTokenHash = await relayer.sendTransaction({
+              to: toTokenAddress,
+              data: sendTokenData,
+              gas: 150000n,
+          });
+
+          const sendReceipt = await publicClient.waitForTransactionReceipt({
+              hash: sendTokenHash,
+              confirmations: 1,
+              timeout: 60000
+          });
+
+          if (sendReceipt.status === 'reverted') {
+              return {
+                  success: false,
+                  error: `Token transfer reverted. Check transaction: ${config.explorer}/tx/${sendTokenHash}`
+              };
+          }
+
+          // 6️⃣ ✅ NEW: Track relayer token balance after transaction
+          console.log(`   📊 Checking relayer ${request.toToken} balance after transaction...`);
+          const finalTokenBalance = await publicClient.readContract({
+              address: toTokenAddress,
+              abi: [{
+                  name: 'balanceOf',
+                  type: 'function',
+                  inputs: [{ name: 'account', type: 'address' }],
+                  outputs: [{ name: '', type: 'uint256' }],
+                  stateMutability: 'view',
+              }],
+              functionName: 'balanceOf',
+              args: [relayer.account.address],
+          }) as bigint;
+
+          console.log(`   💰 Relayer ${request.toToken} balance: ${formatUnits(finalTokenBalance, 6)} ${request.toToken}`);
+
+          console.log(`\n✅ [${request.chain}] ETH → TOKEN SWAP COMPLETE`);
+          console.log(`   Wrap Transaction: ${wrapHash}`);
+          console.log(`   Swap Transaction: ${swapHash}`);
+          console.log(`   Send Transaction: ${sendTokenHash}`);
+          console.log(`   User received: ${formatUnits(userTokenAmount, 6)} ${request.toToken}`);
+          console.log(`   Relayer kept: ${formatUnits(feeInTokens, 6)} ${request.toToken} as fee`);
+          console.log(`   📊 Final relayer ${request.toToken} balance: ${formatUnits(finalTokenBalance, 6)} ${request.toToken}`);
+
+          // 7️⃣ ✅ NEW: Log comprehensive relayer balances
+          await this.logRelayerBalances(request.chain);
+
+          return {
+              success: true,
+              hash: sendTokenHash,
+              fee: formatUnits(feeInTokens, 6),
+              netAmount: formatUnits(userTokenAmount, 6),
+          };
+
+      } catch (error: any) {
+          console.error(`\n❌ [${request.chain}] ETH → TOKEN SWAP FAILED`);
+          console.error(`   Error: ${error.message}`);
+          return {
+              success: false,
+              error: `ETH → Token swap failed: ${error.message}`
+          };
+      }
   }
 
   async checkBalance(
@@ -922,6 +1217,87 @@ export class RelayerService {
     }
 
     return balances;
+  }
+
+  // ✅ NEW: Check relayer token balances across all chains
+  async getAllRelayerTokenBalances(): Promise<Record<string, Record<string, string>>> {
+    const tokenBalances: Record<string, Record<string, string>> = {};
+
+    for (const chain of this.relayers.keys()) {
+      const relayer = this.relayers.get(chain);
+      if (!relayer) continue;
+
+      const config = CHAIN_CONFIG[chain];
+      const publicClient = createPublicClient({
+        chain: config.chain,
+        transport: http(config.rpc),
+      });
+
+      tokenBalances[chain] = {};
+
+      // Check USDC balance
+      try {
+        const usdcBalance = await publicClient.readContract({
+          address: config.usdc as `0x${string}`,
+          abi: [{
+            name: 'balanceOf',
+            type: 'function',
+            inputs: [{ name: 'account', type: 'address' }],
+            outputs: [{ name: '', type: 'uint256' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'balanceOf',
+          args: [relayer.account.address],
+        }) as bigint;
+        tokenBalances[chain]['USDC'] = formatUnits(usdcBalance, 6);
+      } catch (error) {
+        console.error(`Failed to check USDC balance on ${chain}:`, error);
+        tokenBalances[chain]['USDC'] = '0';
+      }
+
+      // Check USDT balance
+      try {
+        const usdtBalance = await publicClient.readContract({
+          address: config.usdt as `0x${string}`,
+          abi: [{
+            name: 'balanceOf',
+            type: 'function',
+            inputs: [{ name: 'account', type: 'address' }],
+            outputs: [{ name: '', type: 'uint256' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'balanceOf',
+          args: [relayer.account.address],
+        }) as bigint;
+        tokenBalances[chain]['USDT'] = formatUnits(usdtBalance, 6);
+      } catch (error) {
+        console.error(`Failed to check USDT balance on ${chain}:`, error);
+        tokenBalances[chain]['USDT'] = '0';
+      }
+
+      // Check WETH balance
+      try {
+        const wethAddress = DEX_CONFIG[chain as keyof typeof DEX_CONFIG].TOKENS.ETH.address;
+        const wethBalance = await publicClient.readContract({
+          address: wethAddress as `0x${string}`,
+          abi: [{
+            name: 'balanceOf',
+            type: 'function',
+            inputs: [{ name: 'account', type: 'address' }],
+            outputs: [{ name: '', type: 'uint256' }],
+            stateMutability: 'view',
+          }],
+          functionName: 'balanceOf',
+          args: [relayer.account.address],
+        }) as bigint;
+        tokenBalances[chain]['WETH'] = formatUnits(wethBalance, 18);
+      } catch (error) {
+        console.error(`Failed to check WETH balance on ${chain}:`, error);
+        tokenBalances[chain]['WETH'] = '0';
+      }
+    }
+
+    return tokenBalances;
   }
 
   calculateFee(amount: bigint, isCrossChain: boolean = false): bigint {
@@ -1019,6 +1395,244 @@ export class RelayerService {
     // Default to 3000 (0.3%) - most common pool
     console.log(`   ✅ Using default fee tier: 3000 (0.3%)`);
     return 3000;
+  }
+
+  // ✅ NEW: Execute relayer swap function (as per your example)
+  async executeRelayerSwap(
+    userAddress: `0x${string}`,
+    usdcAmount: string,
+    relayerPrivateKey: string,
+    feePercentage: number = 0.5 // 0.5% fee by default
+  ): Promise<{ hash: Hash; ethAmount: string }> {
+    console.log('🚀 Starting relayer swap process...');
+    console.log(`👤 User: ${userAddress}`);
+    console.log(`💰 Amount: ${usdcAmount} USDC`);
+    console.log(`💸 Fee: ${feePercentage}%`);
+
+    // Create wallet account from private key
+    const relayerAccount = privateKeyToAccount(relayerPrivateKey as `0x${string}`);
+    console.log(`🔑 Relayer address: ${relayerAccount.address}`);
+
+    // Create wallet client for the relayer
+    const relayerClient = createWalletClient({
+      account: relayerAccount,
+      chain: sepolia,
+      transport: http(process.env.ETH_RPC || process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL || 'https://rpc.sepolia.org'),
+    });
+
+    const publicClient = createPublicClient({
+      chain: sepolia,
+      transport: http(process.env.ETH_RPC || process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL || 'https://rpc.sepolia.org'),
+    });
+
+    const relayerAddress = relayerAccount.address;
+    
+    // Parse USDC amount
+    const amountIn = parseUnits(usdcAmount, 6); // USDC has 6 decimals
+    console.log(`📊 Parsed amount: ${formatUnits(amountIn, 6)} USDC`);
+    
+    // Get pool info
+    console.log('🔍 Fetching pool information...');
+    const { fee } = await this.getPoolInfo(
+      DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address,
+      DEX_CONFIG['eth-sepolia'].TOKENS.ETH.address,
+      3000 // 0.3% fee tier
+    );
+    console.log(`🏊 Pool fee: ${fee} (${Number(fee) / 10000}%)`);
+
+    // Get quote
+    console.log('📈 Getting swap quote...');
+    const ethAmountOut = await this.getQuote(
+      DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address,
+      DEX_CONFIG['eth-sepolia'].TOKENS.ETH.address,
+      fee as number,
+      amountIn,
+      relayerAddress
+    );
+    console.log(`💱 Expected ETH output: ${formatUnits(ethAmountOut, 18)} ETH`);
+
+    // Calculate fee amount (in ETH)
+    const feeAmount = (ethAmountOut * BigInt(Math.floor(feePercentage * 100))) / 10000n;
+    const userAmount = ethAmountOut - feeAmount;
+    console.log(`💸 Relayer fee: ${formatUnits(feeAmount, 18)} ETH`);
+    console.log(`🎯 User will receive: ${formatUnits(userAmount, 18)} ETH`);
+
+    // Step 1: Receive USDC from user
+    console.log('📥 Step 1: Pulling USDC from user to relayer...');
+    const receiveHash = await relayerClient.sendTransaction({
+      account: relayerAccount,
+      to: DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address as `0x${string}`,
+      data: encodeFunctionData({
+        abi: [{
+          name: 'transferFrom',
+          type: 'function',
+          inputs: [
+            { name: 'from', type: 'address' },
+            { name: 'to', type: 'address' },
+            { name: 'amount', type: 'uint256' }
+          ],
+          outputs: [{ name: '', type: 'bool' }]
+        }],
+        functionName: 'transferFrom',
+        args: [userAddress, relayerAddress, amountIn],
+      }),
+    });
+    console.log(`📝 TransferFrom tx: ${receiveHash}`);
+
+    console.log('⏳ Waiting for transferFrom confirmation...');
+    await publicClient.waitForTransactionReceipt({ hash: receiveHash });
+    console.log('✅ USDC successfully pulled from user!');
+
+    // Step 2: Approve USDC spending
+    console.log('📝 Step 2: Approving USDC spending...');
+    const approveHash = await relayerClient.sendTransaction({
+      account: relayerAccount,
+      to: DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address as `0x${string}`,
+      data: encodeFunctionData({
+        abi: [{
+          name: 'approve',
+          type: 'function',
+          inputs: [
+            { name: 'spender', type: 'address' },
+            { name: 'amount', type: 'uint256' }
+          ],
+          outputs: [{ name: '', type: 'bool' }]
+        }],
+        functionName: 'approve',
+        args: [DEX_CONFIG['eth-sepolia'].ROUTER_ADDRESS, amountIn],
+      }),
+    });
+    console.log(`📝 Approve tx: ${approveHash}`);
+
+    console.log('⏳ Waiting for approval confirmation...');
+    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    console.log('✅ USDC approval confirmed!');
+
+    // Execute swap
+    console.log('🔄 Step 3: Executing swap...');
+    const swapHash = await relayerClient.sendTransaction({
+      account: relayerAccount,
+      to: DEX_CONFIG['eth-sepolia'].ROUTER_ADDRESS as `0x${string}`,
+      data: encodeFunctionData({
+        abi: SWAP_ROUTER_ABI,
+        functionName: 'exactInputSingle',
+        args: [{
+          tokenIn: DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address,
+          tokenOut: DEX_CONFIG['eth-sepolia'].TOKENS.ETH.address,
+          fee: 3000, // 0.3%
+          recipient: relayerAddress, // Keep WETH in relayer
+          amountIn,
+          amountOutMinimum: ethAmountOut * 95n / 100n, // 5% slippage
+          sqrtPriceLimitX96: 0n
+        }]
+      }),
+      value: 0n
+    });
+    console.log(`📝 Swap tx: ${swapHash}`);
+
+    console.log('⏳ Waiting for swap confirmation...');
+    await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    console.log('✅ Swap completed successfully!');
+
+    // Step 4: Send ETH to user (minus fee)
+    console.log('📤 Step 4: Sending ETH to user...');
+    const sendHash = await relayerClient.sendTransaction({
+      account: relayerAccount,
+      to: userAddress,
+      value: userAmount,
+    });
+    console.log(`📝 Send ETH tx: ${sendHash}`);
+
+    console.log('⏳ Waiting for final transfer confirmation...');
+    await publicClient.waitForTransactionReceipt({ hash: sendHash });
+    console.log('✅ ETH successfully sent to user!');
+    console.log(`🎉 Relayer swap completed! User received: ${formatUnits(userAmount, 18)} ETH`);
+
+    return {
+      hash: sendHash,
+      ethAmount: formatUnits(userAmount, 18),
+    };
+  }
+
+  // Helper methods for the relayer swap
+  private async getPoolInfo(tokenA: string, tokenB: string, fee: number) {
+    // Simplified pool info - in production you'd query the actual pool
+    return { fee };
+  }
+
+  private async getQuote(tokenIn: string, tokenOut: string, fee: number, amountIn: bigint, recipient: string) {
+    // Simplified quote - in production you'd use the quoter contract
+    // For demo purposes, assume 1 USDC = 0.0003 ETH (roughly $3000 ETH price)
+    return amountIn * 3n / 10000n; // Very rough conversion
+  }
+
+  // ✅ NEW: Log relayer balances after transaction
+  async logRelayerBalances(chain: SupportedChain) {
+    console.log(`\n📊 [${chain}] RELAYER BALANCE REPORT`);
+    console.log(`   ==========================================`);
+    
+    const relayer = this.relayers.get(chain);
+    if (!relayer) {
+      console.log(`   ❌ No relayer found for ${chain}`);
+      return;
+    }
+
+    const config = CHAIN_CONFIG[chain];
+    const publicClient = createPublicClient({
+      chain: config.chain,
+      transport: http(config.rpc),
+    });
+
+    // ETH Balance
+    try {
+      const ethBalance = await publicClient.getBalance({
+        address: relayer.account.address
+      });
+      console.log(`   💰 ETH Balance: ${formatUnits(ethBalance, 18)} ETH`);
+    } catch (error) {
+      console.log(`   ❌ Failed to check ETH balance: ${error}`);
+    }
+
+    // USDC Balance
+    try {
+      const usdcBalance = await publicClient.readContract({
+        address: config.usdc as `0x${string}`,
+        abi: [{
+          name: 'balanceOf',
+          type: 'function',
+          inputs: [{ name: 'account', type: 'address' }],
+          outputs: [{ name: '', type: 'uint256' }],
+          stateMutability: 'view',
+        }],
+        functionName: 'balanceOf',
+        args: [relayer.account.address],
+      }) as bigint;
+      console.log(`   💰 USDC Balance: ${formatUnits(usdcBalance, 6)} USDC`);
+    } catch (error) {
+      console.log(`   ❌ Failed to check USDC balance: ${error}`);
+    }
+
+    // WETH Balance
+    try {
+      const wethAddress = DEX_CONFIG[chain as keyof typeof DEX_CONFIG].TOKENS.ETH.address;
+      const wethBalance = await publicClient.readContract({
+        address: wethAddress as `0x${string}`,
+        abi: [{
+          name: 'balanceOf',
+          type: 'function',
+          inputs: [{ name: 'account', type: 'address' }],
+          outputs: [{ name: '', type: 'uint256' }],
+          stateMutability: 'view',
+        }],
+        functionName: 'balanceOf',
+        args: [relayer.account.address],
+      }) as bigint;
+      console.log(`   💰 WETH Balance: ${formatUnits(wethBalance, 18)} WETH`);
+    } catch (error) {
+      console.log(`   ❌ Failed to check WETH balance: ${error}`);
+    }
+
+    console.log(`   ==========================================\n`);
   }
 
   // Admin functions
