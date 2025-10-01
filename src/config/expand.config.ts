@@ -1,6 +1,6 @@
 // Expand Network Configuration for Testnets Only
 export const EXPAND_CONFIG = {
-  API_KEY: process.env.NEXT_PUBLIC_EXPAND_API_KEY || '',
+  API_KEY: process.env.EXPAND_API_KEY || '',
   API_URL: 'https://api.expand.network',
   DEX_ID: '1301', // Default to Uniswap V3 on Ethereum Sepolia
   GAS_PRIORITY: 'medium' as const,
@@ -35,7 +35,7 @@ export const EXPAND_CONFIG = {
 
 // Validate required environment variables
 if (!EXPAND_CONFIG.API_KEY && typeof window !== 'undefined') {
-  console.warn('Missing NEXT_PUBLIC_EXPAND_API_KEY environment variable');
+  console.warn('Missing EXPAND_API_KEY environment variable');
 }
 
 // Export Testnet DEX IDs for reference

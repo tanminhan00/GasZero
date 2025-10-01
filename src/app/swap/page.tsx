@@ -8,7 +8,7 @@ import { arbitrumSepolia, sepolia } from 'viem/chains';
 import toast, { Toaster } from 'react-hot-toast';
 import relayerAddresses from '@/config/relayers.json';
 import { NetworkType, DEX_CONFIG } from '@/config/chain.config';
-import { getUserBalance, getPrice, getPool } from '@/lib/expand-api';
+import { getUserBalance, getPrice } from '@/lib/expand-api';
 import { EXPAND_CONFIG } from '@/config/expand.config';
 import { executeDirectSwap } from '@/lib/direct-swap';
 import { executeRelayerSwap } from '@/lib/relayer-swap';
@@ -142,34 +142,6 @@ export default function SwapPage() {
         const amountIn = amount ? parseUnits(amount, getSupportedTokens(selectedChain)[fromToken].decimals).toString() : '100000000';
         const dexId = EXPAND_CONFIG.SUPPORTED_CHAINS[selectedChain].dexId;
         const chainId = EXPAND_CONFIG.SUPPORTED_CHAINS[selectedChain].chainId;
-
-        // Only fetch pool data if we're on Ethereum Sepolia and using USDC/ETH pair
-        if (selectedChain === 'eth-sepolia' && 
-            ((fromToken === 'USDC' && toToken === 'ETH') || 
-             (fromToken === 'ETH' && toToken === 'USDC'))) {
-          const poolResponse = await getPool({
-            dexId,
-            tokenA: fromTokenAddress,
-            tokenB: toTokenAddress,
-            path: [fromTokenAddress, toTokenAddress],
-            amountIn,
-            gas: '800000',
-            from: address,
-            to: address,
-            cheapestSwap: true,
-            gasPriority: 'high',
-            bestSwap: true,
-            chainId,
-          });
-
-          if (poolResponse.status === 200) {
-            setPoolData({
-              pool: poolResponse.data.pool,
-              fee: poolResponse.data.fee,
-              liquidity: poolResponse.data.liquidity,
-            });
-          }
-        }
 
         // Only fetch price if amount is set
         if (amount) {

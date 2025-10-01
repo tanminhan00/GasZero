@@ -1,4 +1,18 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# OneTap - Gasless Swap Platform
+
+This is a [Next.js](https://nextjs.org) project for gasless token swaps using Uniswap V3 and Expand API.
+
+## Environment Variables
+
+Create a `.env.local` file in the root directory with the following variables:
+
+```bash
+# Expand API Configuration
+EXPAND_API_KEY=your_expand_api_key_here
+
+# Sepolia RPC Configuration  
+NEXT_PUBLIC_SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/your_infura_project_id
+```
 
 ## Getting Started
 

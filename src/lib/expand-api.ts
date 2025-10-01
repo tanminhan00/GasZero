@@ -1,8 +1,5 @@
-const EXPAND_API_URL = 'https://api.expand.network';
-const EXPAND_HISTORICAL_API_URL = 'https://historicallp.api.expand.network';
-
-// For client-side calls, we must use NEXT_PUBLIC_ prefix
-const NEXT_PUBLIC_EXPAND_API_KEY = process.env.NEXT_PUBLIC_EXPAND_API_KEY;
+// Use proxy API routes instead of direct calls to avoid CORS issues
+const PROXY_API_URL = '/api/expand-proxy';
 
 export interface GasEstimateRequest {
   chainId: string;
@@ -27,53 +24,32 @@ export interface TokenBalance {
   tokenSymbol: string;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
+async function fetchWithAuth(endpoint: string, options: RequestInit = {}) {
   // Check if we're in a browser environment
   if (typeof window === 'undefined') {
     throw new Error('fetchWithAuth must be called from the client side');
   }
 
-  // Check for API key
-  if (!NEXT_PUBLIC_EXPAND_API_KEY) {
-    console.error('NEXT_PUBLIC_EXPAND_API_KEY is not set');
-    throw new Error('Cannot make API request: NEXT_PUBLIC_EXPAND_API_KEY is not set');
-  }
-
-  // Prepare headers with CORS support
-  const headers = new Headers({
-    'x-api-key': NEXT_PUBLIC_EXPAND_API_KEY,
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  });
-
-  // Merge with any custom headers
-  if (options.headers) {
-    Object.entries(options.headers).forEach(([key, value]) => {
-      if (value) headers.append(key, value);
-    });
-  }
-
-  // Prepare request options
-  const requestOptions: RequestInit = {
-    ...options,
-    headers,
-    mode: 'cors',
-    credentials: 'omit',
-  };
+  // Use proxy API route to avoid CORS issues
+  const url = `${PROXY_API_URL}?endpoint=${endpoint}`;
 
   try {
-    // Make the request
-    const response = await fetch(url, requestOptions);
+    // Make the request through our proxy
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...options.headers,
+      },
+    });
 
-    // Get response text and parse as JSON
-    const responseText = await response.text();
-    const responseData = responseText ? JSON.parse(responseText) : null;
-
-    // Check for error responses
     if (!response.ok) {
-      throw new Error(`API Error (${response.status}): ${JSON.stringify(responseData)}`);
+      const errorData = await response.json();
+      throw new Error(`API Error (${response.status}): ${JSON.stringify(errorData)}`);
     }
-    return responseData;
+
+    return await response.json();
   } catch (error) {
     // Log error message
     console.error('Fetch error:', error instanceof Error ? error.message : 'Unknown error');
@@ -89,7 +65,7 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
 
 export async function getApprovalData(chainId: string, address: string): Promise<ApprovalData> {
   return fetchWithAuth(
-    `${EXPAND_HISTORICAL_API_URL}/chain/getapprovaldata?chainId=${chainId}&address=${address}`
+    `historicallp.api.expand.network/chain/getapprovaldata?chainId=${chainId}&address=${address}`
   );
 }
 
@@ -97,7 +73,7 @@ export async function estimateGas(params: GasEstimateRequest): Promise<{
   gasLimit: string;
   gasPrice: string;
 }> {
-  return fetchWithAuth(`${EXPAND_API_URL}/chain/estimategas`, {
+  return fetchWithAuth('chain/estimategas', {
     method: 'POST',
     body: JSON.stringify(params),
   });
@@ -117,7 +93,7 @@ export async function getTokenBalance(params: {
   });
 
   return fetchWithAuth(
-    `${EXPAND_API_URL}/chain/getbalance?${queryParams}`
+    `chain/getbalance?${queryParams}`
   );
 }
 
@@ -143,62 +119,9 @@ export async function getUserBalance(params: {
   });
 
   return fetchWithAuth(
-    `${EXPAND_API_URL}/fungibletoken/getuserbalance?${queryParams}`
+    `fungibletoken/getuserbalance?${queryParams}`
   );
 }
-
-export interface GetPoolParams {
-  dexId: string;
-  tokenA: string;
-  tokenB: string;
-  path: string[];
-  amountIn: string;
-  gas: string;
-  from: string;
-  to: string;
-  cheapestSwap: boolean;
-  gasPriority: 'high' | 'medium' | 'low';
-  bestSwap: boolean;
-  chainId: string;
-}
-
-export interface GetPoolResponse {
-  status: number;
-  msg: string;
-  data: {
-    pool: string;
-    fee: string;
-    liquidity: string;
-    sqrtPriceX96: string;
-    tick: string;
-  };
-}
-
-export const getPool = async (params: GetPoolParams): Promise<GetPoolResponse> => {
-  const queryParams = new URLSearchParams({
-    dexId: params.dexId,
-    tokenA: params.tokenA,
-    tokenB: params.tokenB,
-  });
-
-  return fetchWithAuth(
-    `${EXPAND_API_URL}/dex/getpool?${queryParams}`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        path: params.path,
-        amountIn: params.amountIn,
-        gas: params.gas,
-        from: params.from,
-        to: params.to,
-        cheapestSwap: params.cheapestSwap,
-        gasPriority: params.gasPriority,
-        bestSwap: params.bestSwap,
-        chainId: params.chainId,
-      }),
-    }
-  );
-};
 
 export interface GetPriceResponse {
   status: number;
@@ -221,7 +144,7 @@ export const getPrice = async (params: {
   });
 
   return fetchWithAuth(
-    `${EXPAND_API_URL}/dex/getprice?${queryParams}`
+    `dex/getprice?${queryParams}`
   );
 };
 
@@ -252,7 +175,7 @@ export const swap = async (params: {
   dexId: string;
 }): Promise<SwapResponse> => {
   return fetchWithAuth(
-    `${EXPAND_API_URL}/dex/swap`,
+    'dex/swap',
     {
       method: 'POST',
       body: JSON.stringify(params),

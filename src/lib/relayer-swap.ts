@@ -31,6 +31,8 @@ const publicClient = createPublicClient({
 
 // Helper to get pool info
 async function getPoolInfo(tokenIn: string, tokenOut: string, fee: number) {
+  console.log(`🔍 Looking up pool: ${tokenIn} -> ${tokenOut} (fee: ${fee})`);
+  
   const poolAddress = await publicClient.readContract({
     address: POOL_FACTORY_ADDRESS as `0x${string}`,
     abi: POOL_FACTORY_ABI,
@@ -41,6 +43,8 @@ async function getPoolInfo(tokenIn: string, tokenOut: string, fee: number) {
   if (!poolAddress || poolAddress === '0x0000000000000000000000000000000000000000') {
     throw new Error('Pool not found');
   }
+
+  console.log(`🏊 Pool found: ${poolAddress}`);
 
   const [token0, token1, poolFee] = await Promise.all([
     publicClient.readContract({
@@ -60,6 +64,7 @@ async function getPoolInfo(tokenIn: string, tokenOut: string, fee: number) {
     }),
   ]);
 
+  console.log(`📊 Pool details: token0=${token0}, token1=${token1}, fee=${poolFee}`);
   return { poolAddress, token0, token1, fee: poolFee };
 }
 
@@ -71,6 +76,8 @@ async function getQuote(
   amountIn: bigint,
   recipient: string
 ) {
+  console.log(`📈 Getting quote for ${formatUnits(amountIn, 6)} USDC -> ETH`);
+  
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 60 * 20); // 20 minutes
 
   const params = {
@@ -88,6 +95,7 @@ async function getQuote(
     args: [params],
   }) as [bigint, bigint, number, bigint];
 
+  console.log(`💱 Quote result: ${formatUnits(amountOut, 18)} ETH`);
   return amountOut;
 }
 
@@ -98,8 +106,14 @@ export async function executeRelayerSwap(
   relayerPrivateKey: string,
   feePercentage: number = 0.5 // 0.5% fee by default
 ): Promise<{ hash: Hash; ethAmount: string }> {
+  console.log('🚀 Starting relayer swap process...');
+  console.log(`👤 User: ${userAddress}`);
+  console.log(`💰 Amount: ${usdcAmount} USDC`);
+  console.log(`💸 Fee: ${feePercentage}%`);
+
   // Create wallet account from private key
   const relayerAccount = privateKeyToAccount(relayerPrivateKey as `0x${string}`);
+  console.log(`🔑 Relayer address: ${relayerAccount.address}`);
 
   // Create wallet client for the relayer
   const relayerClient = createWalletClient({
@@ -112,15 +126,19 @@ export async function executeRelayerSwap(
   
   // Parse USDC amount
   const amountIn = parseUnits(usdcAmount, 6); // USDC has 6 decimals
+  console.log(`📊 Parsed amount: ${formatUnits(amountIn, 6)} USDC`);
   
   // Get pool info
+  console.log('🔍 Fetching pool information...');
   const { fee } = await getPoolInfo(
     DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address,
     DEX_CONFIG['eth-sepolia'].TOKENS.ETH.address,
     3000 // 0.3% fee tier
   );
+  console.log(`🏊 Pool fee: ${fee} (${Number(fee) / 10000}%)`);
 
   // Get quote
+  console.log('📈 Getting swap quote...');
   const ethAmountOut = await getQuote(
     DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address,
     DEX_CONFIG['eth-sepolia'].TOKENS.ETH.address,
@@ -128,12 +146,16 @@ export async function executeRelayerSwap(
     amountIn,
     relayerAddress
   );
+  console.log(`💱 Expected ETH output: ${formatUnits(ethAmountOut, 18)} ETH`);
 
   // Calculate fee amount (in ETH)
   const feeAmount = (ethAmountOut * BigInt(Math.floor(feePercentage * 100))) / 10000n;
   const userAmount = ethAmountOut - feeAmount;
+  console.log(`💸 Relayer fee: ${formatUnits(feeAmount, 18)} ETH`);
+  console.log(`🎯 User will receive: ${formatUnits(userAmount, 18)} ETH`);
 
-  // First, receive USDC from user
+  // Step 1: Receive USDC from user
+  console.log('📥 Step 1: Pulling USDC from user to relayer...');
   const receiveHash = await relayerClient.sendTransaction({
     account: relayerAccount,
     to: DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address as `0x${string}`,
@@ -143,10 +165,14 @@ export async function executeRelayerSwap(
       args: [userAddress, relayerAddress, amountIn],
     }),
   });
+  console.log(`📝 TransferFrom tx: ${receiveHash}`);
 
+  console.log('⏳ Waiting for transferFrom confirmation...');
   await publicClient.waitForTransactionReceipt({ hash: receiveHash });
+  console.log('✅ USDC successfully pulled from user!');
 
-  // Approve USDC spending
+  // Step 2: Approve USDC spending
+  console.log('📝 Step 2: Approving USDC spending...');
   const approveHash = await relayerClient.sendTransaction({
     account: relayerAccount,
     to: DEX_CONFIG['eth-sepolia'].TOKENS.USDC.address as `0x${string}`,
@@ -156,8 +182,11 @@ export async function executeRelayerSwap(
       args: [SWAP_ROUTER_ADDRESS, amountIn],
     }),
   });
+  console.log(`📝 Approve tx: ${approveHash}`);
 
+  console.log('⏳ Waiting for approval confirmation...');
   await publicClient.waitForTransactionReceipt({ hash: approveHash });
+  console.log('✅ USDC approval confirmed!');
 
   // Execute swap
 
@@ -193,15 +222,25 @@ export async function executeRelayerSwap(
     }),
     value: 0n
   });
+  console.log(`📝 Swap tx: ${swapHash}`);
 
+  console.log('⏳ Waiting for swap confirmation...');
   await publicClient.waitForTransactionReceipt({ hash: swapHash });
+  console.log('✅ Swap completed successfully!');
 
-  // Send ETH to user (minus fee)
+  // Step 4: Send ETH to user (minus fee)
+  console.log('📤 Step 4: Sending ETH to user...');
   const sendHash = await relayerClient.sendTransaction({
     account: relayerAccount,
     to: userAddress,
     value: userAmount,
   });
+  console.log(`📝 Send ETH tx: ${sendHash}`);
+
+  console.log('⏳ Waiting for final transfer confirmation...');
+  await publicClient.waitForTransactionReceipt({ hash: sendHash });
+  console.log('✅ ETH successfully sent to user!');
+  console.log(`🎉 Relayer swap completed! User received: ${formatUnits(userAmount, 18)} ETH`);
 
   return {
     hash: sendHash,
