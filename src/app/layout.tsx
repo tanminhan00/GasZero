@@ -6,7 +6,7 @@ import { Providers } from './providers';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "OneTap - Gasless Transactions",
+  title: "GasZero - Gasless Transactions",
   description: "Execute any transaction without ETH",
 };
 

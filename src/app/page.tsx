@@ -8,8 +8,9 @@ import toast from 'react-hot-toast';
 import { sepolia, arbitrumSepolia, baseSepolia } from 'wagmi/chains';
 import GasZeroApp from './gaszero/page';
 import SwapPage from './swap/page';
+import BridgePage from './bridge/page';
 
-type Tab = 'gaszero' | 'swap';
+type Tab = 'gaszero' | 'swap' | 'bridge';
 type AppChain = 'eth-sepolia' | 'arb-sepolia' | 'base-sepolia';
 
 // Map app chain names to wagmi chain objects
@@ -79,7 +80,7 @@ export default function Home() {
               </div>
               <div>
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
-                  OneTap
+                  GasZero
                 </h1>
                 <p className="text-sm text-purple-300/80">Gasless Transactions Made Simple</p>
               </div>
@@ -114,7 +115,21 @@ export default function Home() {
                 `}
               >
                 <span className="mr-2">🔄</span>
-                Gasless Swap
+                GasZero Swap
+              </button>
+              <button
+                onClick={() => setActiveTab('bridge' as Tab)}
+                className={`
+                  px-6 py-3 rounded-xl font-semibold transition-all duration-300
+                  ${activeTab === 'bridge'
+                    ? 'bg-gradient-to-r from-pink-500 to-orange-500 text-white shadow-lg shadow-pink-500/50'
+                    : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                  }
+                `}
+              >
+                <span className="mr-2">🌉</span>
+                GasZero Bridge
+                <span className="ml-2 text-xs bg-orange-500/30 px-2 py-1 rounded-full">WIP</span>
               </button>
             </div>
           )}
@@ -160,7 +175,7 @@ export default function Home() {
 
                 <div className="bg-gradient-to-br from-purple-900/40 to-pink-900/40 backdrop-blur-sm rounded-2xl p-8 border border-purple-500/30 hover:scale-105 transition-transform">
                   <div className="text-5xl mb-4">🔄</div>
-                  <h3 className="text-xl font-bold text-white mb-2">Gasless Swaps</h3>
+                  <h3 className="text-xl font-bold text-white mb-2">GasZero Swaps</h3>
                   <p className="text-purple-300 text-sm">
                     Swap USDC to ETH and vice versa without spending a cent on gas
                   </p>
@@ -179,14 +194,17 @@ export default function Home() {
               <div className="mt-16">
                 <p className="text-sm text-purple-400 mb-4 uppercase tracking-wide">Supported Networks</p>
                 <div className="flex justify-center gap-6 flex-wrap">
-                  <div className="px-6 py-3 bg-purple-900/30 rounded-xl border border-purple-500/30 backdrop-blur-sm">
-                    <span className="text-white font-semibold">♦️ Ethereum Sepolia</span>
+                  <div className="px-6 py-3 bg-purple-900/30 rounded-xl border border-purple-500/30 backdrop-blur-sm flex items-center gap-2">
+                    <img src="/eth.png" alt="Ethereum" className="w-6 h-6" />
+                    <span className="text-white font-semibold">Ethereum Sepolia</span>
                   </div>
-                  <div className="px-6 py-3 bg-blue-900/30 rounded-xl border border-blue-500/30 backdrop-blur-sm">
-                    <span className="text-white font-semibold">⚡ Arbitrum Sepolia</span>
+                  <div className="px-6 py-3 bg-blue-900/30 rounded-xl border border-blue-500/30 backdrop-blur-sm flex items-center gap-2">
+                    <img src="/ARB.jpg" alt="Arbitrum" className="w-6 h-6 rounded-full" />
+                    <span className="text-white font-semibold">Arbitrum Sepolia</span>
                   </div>
-                  <div className="px-6 py-3 bg-indigo-900/30 rounded-xl border border-indigo-500/30 backdrop-blur-sm">
-                    <span className="text-white font-semibold">🔷 Base Sepolia</span>
+                  <div className="px-6 py-3 bg-indigo-900/30 rounded-xl border border-indigo-500/30 backdrop-blur-sm flex items-center gap-2">
+                    <img src="/base.png" alt="Base" className="w-6 h-6 rounded-full" />
+                    <span className="text-white font-semibold">Base Sepolia</span>
                   </div>
                 </div>
               </div>
@@ -208,6 +226,9 @@ export default function Home() {
                 onChainChange={(chain) => handleChainChange(chain as AppChain)}
               />
             )}
+            {activeTab === 'bridge' && (
+              <BridgePage embedded />
+            )}
           </div>
         )}
       </div>
@@ -216,7 +237,7 @@ export default function Home() {
       <div className="relative border-t border-purple-500/20 backdrop-blur-xl bg-black/30 mt-20">
         <div className="container mx-auto px-4 py-6">
           <div className="text-center text-purple-400 text-sm">
-            <p>OneTap • Gasless Transactions • Built with ❤️</p>
+            <p>GasZero • Gasless Transactions • Built with ❤️</p>
           </div>
         </div>
       </div>

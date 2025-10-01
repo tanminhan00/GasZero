@@ -60,6 +60,7 @@ export default function GasZeroApp({
       name: 'Ethereum Sepolia',
       color: 'from-purple-500 to-blue-500',
       icon: '♦️',
+      logo: '/eth.png',
       tokens: ['USDC', 'USDT'],
       chain: sepolia,
       relayer: relayerAddresses.relayerAddresses['eth-sepolia'],
@@ -68,6 +69,7 @@ export default function GasZeroApp({
       name: 'Arbitrum Sepolia',
       color: 'from-blue-500 to-cyan-500',
       icon: '⚡',
+      logo: '/ARB.jpg',
       tokens: ['USDC', 'USDT'],
       chain: arbitrumSepolia,
       relayer: relayerAddresses.relayerAddresses['arb-sepolia'],
@@ -76,6 +78,7 @@ export default function GasZeroApp({
       name: 'Base Sepolia',
       color: 'from-blue-600 to-indigo-600',
       icon: '🔷',
+      logo: '/base.png',
       tokens: ['USDC', 'USDT'],
       chain: baseSepolia,
       relayer: relayerAddresses.relayerAddresses['base-sepolia'],
@@ -634,8 +637,8 @@ export default function GasZeroApp({
                         {selectedChain === key && (
                           <div className={`absolute inset-0 bg-gradient-to-br ${chain.color} opacity-10`}></div>
                         )}
-                        <div className="relative">
-                          <div className="text-4xl mb-2">{chain.icon}</div>
+                        <div className="relative flex flex-col items-center">
+                          <img src={chain.logo} alt={chain.name} className="w-12 h-12 mb-2 rounded-full" />
                           <div className="font-bold text-white">{chain.name}</div>
                           <div className="text-xs text-gray-400 mt-1">Zero gas required</div>
                         </div>

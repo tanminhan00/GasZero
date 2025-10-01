@@ -17,7 +17,7 @@ export const NETWORKS = {
     chain: arbitrumSepolia,
     chainId: 421614,
     // Arbitrum Sepolia Uniswap V3 Router
-    routerAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+    routerAddress: '0x101F443B4d1b059569D643917553c771E1b9663E',
     // Arbitrum Sepolia Explorer
     explorer: 'https://sepolia.arbiscan.io'
   },

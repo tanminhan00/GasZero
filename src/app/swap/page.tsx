@@ -32,6 +32,7 @@ const swapChains: Record<SwapSupportedChain, {
     name: string;
     color: string;
     icon: string;
+    logo: string;
     chain: typeof sepolia | typeof arbitrumSepolia;
     relayer: string;
 }> = {
@@ -39,6 +40,7 @@ const swapChains: Record<SwapSupportedChain, {
         name: 'Ethereum Sepolia',
         color: 'from-blue-500 to-cyan-500',
         icon: '⚡',
+        logo: '/eth.png',
         chain: sepolia,
         relayer: relayerAddresses.relayerAddresses['eth-sepolia'],
     },
@@ -46,6 +48,7 @@ const swapChains: Record<SwapSupportedChain, {
         name: 'Arbitrum Sepolia',
         color: 'from-purple-500 to-pink-500',
         icon: '🔷',
+        logo: '/ARB.jpg',
         chain: arbitrumSepolia,
         relayer: relayerAddresses.relayerAddresses['arb-sepolia'],
     },
@@ -164,25 +167,25 @@ export default function SwapPage({
                 console.log('[SWAP] Fetching quote from', amount, fromToken, '→', toToken, 'on', selectedChain);
 
                 const amountInWei = parseUnits(amount, fromTokenConfig.decimals);
-                
+
                 // Use Expand Network API for real-time pricing
                 try {
                     console.log('[SWAP] Getting price from Expand Network API...');
-                    
+
                     const priceResult = await getPrice({
                         dexId: '1301', // Uniswap V3
                         path: `${fromTokenConfig.address},${toTokenConfig.address}`,
                         amountIn: amountInWei.toString()
                     });
-                    
+
                     console.log('[SWAP] API Response:', JSON.stringify(priceResult, null, 2));
 
                     if ((priceResult.status === 1 || priceResult.status === 200) && priceResult.data.amountsOut.length > 0) {
                         const amountOut = priceResult.data.amountsOut[priceResult.data.amountsOut.length - 1];
                         const formattedAmount = formatUnits(BigInt(amountOut), toTokenConfig.decimals);
-                        
+
                         setExpectedOutput(formattedAmount);
-                        
+
                         // Handle price impact - convert from decimal to percentage if needed
                         let priceImpactValue = '0.1'; // Default fallback
                         if (priceResult.data.priceImpact) {
@@ -192,34 +195,34 @@ export default function SwapPage({
                             priceImpactValue = impact < 1 ? (impact * 100).toFixed(2) : impact.toFixed(2);
                         }
                         setPriceImpact(priceImpactValue);
-                        
+
                         // Store debug information for display
                         const formattedAmounts = priceResult.data.amountsOut.map((amount, index) => {
                             const decimals = index === 0 ? fromTokenConfig.decimals : toTokenConfig.decimals;
                             return formatUnits(BigInt(amount), decimals);
                         });
-                        
+
                         setApiDebugInfo({
                             amountIn: formatUnits(BigInt(priceResult.data.amountIn), fromTokenConfig.decimals),
                             amountsOut: priceResult.data.amountsOut,
                             formattedAmounts: formattedAmounts,
                             priceImpact: priceResult.data.priceImpact || 'N/A'
                         });
-                        
+
                         console.log('[SWAP] Processing:', {
                             status: priceResult.status,
                             amountIn: priceResult.data.amountIn,
                             amountsOut: priceResult.data.amountsOut,
                             finalOutput: formattedAmount
                         });
-                        
+
                         console.log('[SWAP] ✅ Price:', formattedAmount, toToken, '| Impact:', priceImpactValue + '%');
                     } else {
                         throw new Error('Invalid response from Expand API');
                     }
                 } catch (apiError: any) {
                     console.error('[SWAP] API failed:', apiError.message);
-                    
+
                     // Don't use fallback - wait for API response
                     setExpectedOutput('0');
                     setPriceImpact('0');
@@ -581,7 +584,7 @@ export default function SwapPage({
         }
 
         setLoading(true);
-        const toastId = toast.loading('🔄 Preparing gasless swap...');
+        const toastId = toast.loading('🔄 Preparing GasZero swap...');
 
         // Warn about testnet liquidity
         if (!expectedOutput || parseFloat(expectedOutput) < parseFloat(amount) * 0.0001) {
@@ -635,7 +638,7 @@ export default function SwapPage({
             const signature = await signMessageAsync({ message }) as `0x${string}`;
 
             // Send to relayer with correct structure
-            toast.loading('⚡ Executing gasless swap...', { id: toastId });
+            toast.loading('⚡ Executing GasZero swap...', { id: toastId });
 
             const response = await fetch('/api/relay', {
                 method: 'POST',
@@ -798,8 +801,8 @@ export default function SwapPage({
                                     {selectedChain === key && (
                                         <div className={`absolute inset-0 bg-gradient-to-br ${chain.color} opacity-10`}></div>
                                     )}
-                                    <div className="relative">
-                                        <div className="text-3xl mb-2">{chain.icon}</div>
+                                    <div className="relative flex items-center gap-3">
+                                        <img src={chain.logo} alt={chain.name} className="w-8 h-8 rounded-full" />
                                         <div className="font-bold text-white">{chain.name}</div>
                                     </div>
                                 </button>
@@ -829,7 +832,7 @@ export default function SwapPage({
                             <div className="p-6 rounded-3xl bg-gradient-to-br from-purple-900/50 to-pink-900/50 border border-purple-500/40 backdrop-blur-xl shadow-2xl shadow-purple-500/20">
                                 <h3 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
                                     <span>Swap Tokens</span>
-                                    <span className="text-sm font-normal px-3 py-1 rounded-full bg-purple-500/20 text-purple-300">Gasless ⚡</span>
+                                    <span className="text-sm font-normal px-3 py-1 rounded-full bg-purple-500/20 text-purple-300">GasZero ⚡</span>
                                 </h3>
 
                                 <div className="mb-2">
@@ -887,7 +890,7 @@ export default function SwapPage({
                                                 </div>
                                             </div>
                                         )}
-                                        
+
                                         {!isFetchingPrice && parseFloat(expectedOutput || '0') === 0 && amount && parseFloat(amount) > 0 && (
                                             <div className="mt-2 p-3 rounded-lg bg-orange-900/20 border border-orange-500/30">
                                                 <div className="text-xs text-orange-300 font-semibold mb-1">
@@ -898,7 +901,7 @@ export default function SwapPage({
                                                 </div>
                                             </div>
                                         )}
-                                        
+
                                         {/* Simple API Info */}
                                         {apiDebugInfo && (
                                             <div className="mt-3 p-3 rounded-lg bg-slate-800/30 border border-slate-600/20">
