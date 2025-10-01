@@ -1,294 +1,223 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useAccount, useConnect } from 'wagmi';
+import { useAccount, useSwitchChain } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
-import { executeGaslessTransaction, getSmartAccountAddress, getSmartAccountUSDCBalance } from '@/lib/gasless';
-// Removed unused revenue import
-import toast, { Toaster } from 'react-hot-toast';
+import { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
+import { sepolia, arbitrumSepolia, baseSepolia } from 'wagmi/chains';
+import GasZeroApp from './gaszero/page';
+import SwapPage from './swap/page';
+
+type Tab = 'gaszero' | 'swap';
+type AppChain = 'eth-sepolia' | 'arb-sepolia' | 'base-sepolia';
+
+// Map app chain names to wagmi chain objects
+const CHAIN_MAP = {
+  'eth-sepolia': sepolia,
+  'arb-sepolia': arbitrumSepolia,
+  'base-sepolia': baseSepolia,
+} as const;
 
 export default function Home() {
-  const [intent, setIntent] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [smartAccountAddress, setSmartAccountAddress] = useState<string>('');
-  const [smartAccountBalance, setSmartAccountBalance] = useState<string>('0');
-  const { address, isConnected } = useAccount();
+  const [activeTab, setActiveTab] = useState<Tab>('gaszero');
+  const [selectedChain, setSelectedChain] = useState<AppChain>('base-sepolia');
+  const { isConnected, chain: connectedChain } = useAccount();
+  const { switchChain } = useSwitchChain();
 
-  // Get smart account address and balance when wallet connects
+  // Sync selected chain with connected wallet chain on mount
   useEffect(() => {
-    if (address) {
-      getSmartAccountAddress(address)
-        .then(addr => {
-          setSmartAccountAddress(addr);
-          // Also fetch the balance
-          return getSmartAccountUSDCBalance(addr);
-        })
-        .then(setSmartAccountBalance)
-        .catch(console.error);
+    if (connectedChain) {
+      if (connectedChain.id === sepolia.id) {
+        setSelectedChain('eth-sepolia');
+      } else if (connectedChain.id === arbitrumSepolia.id) {
+        setSelectedChain('arb-sepolia');
+      } else if (connectedChain.id === baseSepolia.id) {
+        setSelectedChain('base-sepolia');
+      }
     }
-  }, [address]);
+  }, [connectedChain]);
 
-  // Refresh balance after transaction
-  const refreshBalance = async () => {
-    if (smartAccountAddress) {
-      const balance = await getSmartAccountUSDCBalance(smartAccountAddress as `0x${string}`);
-      setSmartAccountBalance(balance);
+  // Function to handle chain switching
+  const handleChainChange = async (chain: AppChain) => {
+    setSelectedChain(chain);
+
+    // Actually switch the user's wallet network
+    const targetChain = CHAIN_MAP[chain];
+    if (switchChain && targetChain) {
+      try {
+        toast.loading(`Switching to ${targetChain.name}...`, { id: 'chain-switch' });
+        await switchChain({ chainId: targetChain.id });
+        toast.success(`Switched to ${targetChain.name}!`, { id: 'chain-switch', duration: 2000 });
+      } catch (error: any) {
+        console.error('Chain switch error:', error);
+        if (error.message?.includes('rejected') || error.message?.includes('denied')) {
+          toast.error('Chain switch rejected', { id: 'chain-switch' });
+        } else {
+          toast.error('Failed to switch chain', { id: 'chain-switch' });
+        }
+      }
     }
   };
 
-  async function handleExecute() {
-    if (!address) {
-      toast.error('Please connect your wallet');
-      return;
-    }
-
-    setLoading(true);
-    const toastId = toast.loading('Processing your transaction...');
-
-    try {
-      // Execute gasless transaction
-      const hash = await executeGaslessTransaction(intent, address);
-
-      toast.success(
-        <div>
-          <p>Transaction successful!</p>
-          <a
-            href={`https://sepolia.basescan.org/tx/${hash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline"
-          >
-            View on Explorer
-          </a>
-        </div>,
-        { id: toastId, duration: 5000 }
-      );
-
-      setIntent('');
-      await refreshBalance(); // Refresh balance after transaction
-    } catch (error: any) {
-      console.error(error);
-      toast.error(error.message || 'Transaction failed', { id: toastId });
-    } finally {
-      setLoading(false);
-    }
-  }
-
   return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100">
+    <main className="min-h-screen bg-gradient-to-br from-slate-950 via-purple-950 to-slate-950 relative overflow-hidden">
       <Toaster position="top-right" />
+      {/* Animated Background */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
+      </div>
 
-      <div className="container mx-auto px-4 py-16">
-        <div className="max-w-2xl mx-auto">
-          {/* Header */}
-          <div className="text-center mb-12">
-            <h1 className="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              OneTap
-            </h1>
-            <p className="text-xl text-gray-600">
-              Execute any transaction without ETH
-            </p>
-            <p className="text-sm text-gray-500 mt-2">
-              Pay gas with USDC on Base Sepolia Testnet
-            </p>
-          </div>
-
-          {/* Wallet Connection */}
-          <div className="flex justify-center mb-8">
+      {/* Header with Connect Button and Tabs */}
+      <div className="relative border-b border-purple-500/20 backdrop-blur-xl bg-black/30">
+        <div className="container mx-auto px-4 py-6">
+          <div className="flex justify-between items-center mb-6">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 via-purple-500 to-pink-500 flex items-center justify-center text-2xl shadow-lg shadow-purple-500/50 animate-pulse">
+                ⚡
+              </div>
+              <div>
+                <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                  OneTap
+                </h1>
+                <p className="text-sm text-purple-300/80">Gasless Transactions Made Simple</p>
+              </div>
+            </div>
             <ConnectButton />
           </div>
 
+          {/* Tab Navigation */}
           {isConnected && (
-            <>
-              {/* Smart Account Info */}
-              {smartAccountAddress && (
-                <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="text-sm font-semibold text-blue-900">
-                      🔮 Smart Account Details
-                    </h3>
-                    <div className="text-right">
-                      <p className="text-sm font-bold text-blue-900">
-                        Smart Account: {smartAccountBalance} USDC
-                      </p>
-                      {parseFloat(smartAccountBalance) < 10 && parseFloat(smartAccountBalance) > 0 && (
-                        <p className="text-xs text-orange-600">
-                          ⚠️ Balance low
-                        </p>
-                      )}
-                      <button
-                        onClick={refreshBalance}
-                        className="text-xs text-gray-500 hover:text-gray-700"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-                  </div>
-                  <p className="text-xs text-blue-800 mb-3">
-                    Smart Account Address: <code className="bg-blue-100 px-1 rounded">{smartAccountAddress.slice(0, 6)}...{smartAccountAddress.slice(-4)}</code>
-                  </p>
-
-                  {parseFloat(smartAccountBalance) === 0 && (
-                    <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                      <p className="text-xs font-semibold text-yellow-900 mb-2">
-                        ⚡ Fund Your Smart Account (100% Gasless!)
-                      </p>
-                      <p className="text-xs text-yellow-800 mb-2">
-                        Reality check: Smart accounts require ETH for initial setup.
-                        Consider using the GasZero page instead for truly gasless transactions!
-                      </p>
-                      <button
-                        onClick={async () => {
-                          try {
-                            const amount = prompt('How much USDC to transfer to smart account?', '10');
-                            if (!amount) return;
-
-                            const toastId = toast.loading('Initializing gasless transfer...');
-
-                            // Use executeGaslessTransaction with a funding intent
-                            // This will use the paymaster to sponsor the gas!
-
-                            try {
-                              // Create an intent to fund the smart account
-                              const fundingIntent = `transfer ${amount} USDC to ${smartAccountAddress}`;
-
-                              toast.loading('Sign in MetaMask (NO gas fees - paymaster sponsors everything!)...', { id: toastId });
-
-                              // Execute through smart account with paymaster sponsorship
-                              const hash = await executeGaslessTransaction(
-                                fundingIntent,
-                                address as `0x${string}`
-                              );
-
-                              toast.success(`Funded gaslessly! Hash: ${hash.slice(0, 10)}...`, { id: toastId });
-
-                              // Refresh balance
-                              setTimeout(async () => {
-                                const newBalance = await getSmartAccountUSDCBalance(smartAccountAddress as `0x${string}`);
-                                setSmartAccountBalance(newBalance);
-                                toast.success(`Smart account received ${amount} USDC!`);
-                              }, 5000);
-
-                            } catch (smartAccountError: any) {
-                              // If smart account fails, offer alternative
-                              console.error('Smart account error:', smartAccountError);
-
-                              if (smartAccountError.message?.includes('Insufficient balance in smart account')) {
-                                // This is expected - the smart account needs initial funding
-                                // For the VERY first funding, we need a different approach
-
-                                toast.error('Initial funding requires a one-time ETH transaction. After this, everything is gasless!', { id: toastId });
-
-                                // Fallback to direct transfer for initial funding only
-                                const { createWalletClient, custom, encodeFunctionData, parseUnits } = await import('viem');
-                                const { baseSepolia } = await import('viem/chains');
-                                const { USDC_ADDRESS } = await import('@/config/chain.config');
-
-                                const walletClient = createWalletClient({
-                                  account: address as `0x${string}`,
-                                  chain: baseSepolia,
-                                  transport: custom(window.ethereum),
-                                });
-
-                                const transferData = encodeFunctionData({
-                                  abi: [{
-                                    name: 'transfer',
-                                    type: 'function',
-                                    inputs: [
-                                      { name: 'to', type: 'address' },
-                                      { name: 'amount', type: 'uint256' }
-                                    ],
-                                    outputs: [{ type: 'bool' }]
-                                  }],
-                                  functionName: 'transfer',
-                                  args: [smartAccountAddress as `0x${string}`, parseUnits(amount, 6)]
-                                });
-
-                                toast.loading('One-time setup: Please confirm in MetaMask...', { id: toastId });
-
-                                const hash = await walletClient.sendTransaction({
-                                  to: USDC_ADDRESS as `0x${string}`,
-                                  data: transferData,
-                                  chain: baseSepolia,
-                                });
-
-                                toast.success(`Initial funding complete! All future transactions will be gasless.`, { id: toastId });
-
-                                setTimeout(async () => {
-                                  const newBalance = await getSmartAccountUSDCBalance(smartAccountAddress as `0x${string}`);
-                                  setSmartAccountBalance(newBalance);
-                                }, 5000);
-                              } else {
-                                toast.error(smartAccountError.message || 'Failed to fund smart account', { id: toastId });
-                              }
-                            }
-
-                          } catch (error: any) {
-                            console.error('Funding error:', error);
-                            toast.error(error.message || 'Transaction failed');
-                          }
-                        }}
-                        className="text-xs px-3 py-1 bg-green-500 hover:bg-green-600 text-white rounded transition-colors"
-                      >
-                        Fund Smart Account (Gasless)
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Intent Input */}
-              <div className="bg-white rounded-2xl shadow-xl p-8">
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    What do you want to do?
-                  </label>
-                  <input
-                    type="text"
-                    value={intent}
-                    onChange={(e) => setIntent(e.target.value)}
-                    placeholder="send 10 USDC to 0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb4"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    disabled={loading}
-                  />
-                  <div className="mt-2 flex justify-between items-start">
-                    <div>
-                      <p className="text-sm text-gray-500">Examples:</p>
-                      <ul className="mt-1 text-xs text-gray-400 space-y-1">
-                        <li>• send 10 USDC to 0x742d35...</li>
-                        <li>• 5.5 USDC to 0x742d35...</li>
-                        <li>• transfer 1 USDC to 0x742d35...</li>
-                      </ul>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs font-semibold text-gray-600">Fees:</p>
-                      <p className="text-xs text-gray-500">0.5% (min $0.10)</p>
-                      <p className="text-xs text-green-600 font-semibold">First 10 FREE!</p>
-                    </div>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleExecute}
-                  disabled={loading || !intent}
-                  className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                >
-                  {loading ? 'Executing...' : 'Execute Transaction'}
-                </button>
-              </div>
-
-              {/* Info Box */}
-              <div className="mt-8 p-6 bg-blue-50 rounded-xl">
-                <h3 className="font-semibold text-blue-900 mb-2">How it works:</h3>
-                <ul className="text-sm text-blue-800 space-y-1">
-                  <li>• You sign with your wallet (MetaMask, etc.)</li>
-                  <li>• Smart account is created automatically</li>
-                  <li>• Gas is paid with your USDC tokens</li>
-                  <li>• No ETH needed at any point!</li>
-                </ul>
-              </div>
-            </>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setActiveTab('gaszero')}
+                className={`
+                  px-6 py-3 rounded-xl font-semibold transition-all duration-300
+                  ${activeTab === 'gaszero'
+                    ? 'bg-gradient-to-r from-blue-500 to-purple-500 text-white shadow-lg shadow-blue-500/50'
+                    : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                  }
+                `}
+              >
+                <span className="mr-2">💸</span>
+                GasZero Transfer
+              </button>
+              <button
+                onClick={() => setActiveTab('swap')}
+                className={`
+                  px-6 py-3 rounded-xl font-semibold transition-all duration-300
+                  ${activeTab === 'swap'
+                    ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/50'
+                    : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'
+                  }
+                `}
+              >
+                <span className="mr-2">🔄</span>
+                Gasless Swap
+              </button>
+            </div>
           )}
+        </div>
+      </div>
+
+      {/* Content Area */}
+      <div className="relative">
+        {!isConnected ? (
+          <div className="container mx-auto px-4 py-20">
+            <div className="max-w-4xl mx-auto text-center">
+              <div className="mb-8 relative inline-block">
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-full blur-3xl opacity-30 animate-pulse"></div>
+                <div className="relative">
+                  <h2 className="text-6xl md:text-7xl font-bold text-white mb-4">
+                    Never Worry About
+                  </h2>
+                  <h2 className="text-6xl md:text-7xl font-bold bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                    Gas Fees Again
+                  </h2>
+                </div>
+              </div>
+
+              <p className="text-xl text-purple-300 mb-12 max-w-2xl mx-auto leading-relaxed">
+                Execute transactions, transfer tokens, and swap assets across multiple chains without owning any native tokens. We handle all the gas fees for you.
+              </p>
+
+              <div className="inline-flex p-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-2xl mb-16">
+                <div className="bg-slate-950 rounded-xl px-2 py-2">
+                  <ConnectButton />
+                </div>
+              </div>
+
+              {/* Features Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+                <div className="bg-gradient-to-br from-blue-900/40 to-purple-900/40 backdrop-blur-sm rounded-2xl p-8 border border-blue-500/30 hover:scale-105 transition-transform">
+                  <div className="text-5xl mb-4">💸</div>
+                  <h3 className="text-xl font-bold text-white mb-2">Zero Gas Transfers</h3>
+                  <p className="text-purple-300 text-sm">
+                    Send USDC, USDT across Ethereum, Arbitrum, and Base without any ETH
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-purple-900/40 to-pink-900/40 backdrop-blur-sm rounded-2xl p-8 border border-purple-500/30 hover:scale-105 transition-transform">
+                  <div className="text-5xl mb-4">🔄</div>
+                  <h3 className="text-xl font-bold text-white mb-2">Gasless Swaps</h3>
+                  <p className="text-purple-300 text-sm">
+                    Swap USDC to ETH and vice versa without spending a cent on gas
+                  </p>
+                </div>
+
+                <div className="bg-gradient-to-br from-pink-900/40 to-purple-900/40 backdrop-blur-sm rounded-2xl p-8 border border-pink-500/30 hover:scale-105 transition-transform">
+                  <div className="text-5xl mb-4">🎁</div>
+                  <h3 className="text-xl font-bold text-white mb-2">Auto-Funding</h3>
+                  <p className="text-purple-300 text-sm">
+                    We automatically fund approval gas for you. One click and you're done!
+                  </p>
+                </div>
+              </div>
+
+              {/* Supported Chains */}
+              <div className="mt-16">
+                <p className="text-sm text-purple-400 mb-4 uppercase tracking-wide">Supported Networks</p>
+                <div className="flex justify-center gap-6 flex-wrap">
+                  <div className="px-6 py-3 bg-purple-900/30 rounded-xl border border-purple-500/30 backdrop-blur-sm">
+                    <span className="text-white font-semibold">♦️ Ethereum Sepolia</span>
+                  </div>
+                  <div className="px-6 py-3 bg-blue-900/30 rounded-xl border border-blue-500/30 backdrop-blur-sm">
+                    <span className="text-white font-semibold">⚡ Arbitrum Sepolia</span>
+                  </div>
+                  <div className="px-6 py-3 bg-indigo-900/30 rounded-xl border border-indigo-500/30 backdrop-blur-sm">
+                    <span className="text-white font-semibold">🔷 Base Sepolia</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="transition-all duration-300">
+            {activeTab === 'gaszero' && (
+              <GasZeroApp
+                embedded
+                selectedChain={selectedChain}
+                onChainChange={handleChainChange}
+              />
+            )}
+            {activeTab === 'swap' && (
+              <SwapPage
+                embedded
+                selectedChain={selectedChain === 'base-sepolia' ? 'eth-sepolia' : selectedChain}
+                onChainChange={(chain) => handleChainChange(chain as AppChain)}
+              />
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <div className="relative border-t border-purple-500/20 backdrop-blur-xl bg-black/30 mt-20">
+        <div className="container mx-auto px-4 py-6">
+          <div className="text-center text-purple-400 text-sm">
+            <p>OneTap • Gasless Transactions • Built with ❤️</p>
+          </div>
         </div>
       </div>
     </main>

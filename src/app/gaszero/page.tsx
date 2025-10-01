@@ -4,26 +4,44 @@ import { useState, useEffect } from 'react';
 import { useAccount, useSignMessage } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { parseUnits, formatUnits, encodeFunctionData, createPublicClient, createWalletClient, custom, http, parseEther, formatEther } from 'viem';
-import { baseSepolia, arbitrumSepolia } from 'viem/chains';
+import { baseSepolia, arbitrumSepolia, sepolia } from 'viem/chains';
 import toast, { Toaster } from 'react-hot-toast';
 import relayerAddresses from '@/config/relayers.json';
 
-type Chain = 'arbitrum' | 'base';
+type Chain = 'eth-sepolia' | 'arb-sepolia' | 'base-sepolia';
 type Token = 'USDC' | 'USDT';
 
 const TOKEN_ADDRESSES = {
-  arbitrum: {
+  'eth-sepolia': {
+    USDC: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', // USDC on Ethereum Sepolia
+    USDT: '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06', // USDT on Ethereum Sepolia
+  },
+  'arb-sepolia': {
     USDC: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
     USDT: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
   },
-  base: {
+  'base-sepolia': {
     USDC: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
     USDT: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   },
 };
 
-export default function GasZeroApp() {
-  const [selectedChain, setSelectedChain] = useState<Chain>('base');
+interface GasZeroProps {
+  embedded?: boolean;
+  selectedChain?: Chain;
+  onChainChange?: (chain: Chain) => void;
+}
+
+export default function GasZeroApp({
+  embedded = false,
+  selectedChain: externalSelectedChain,
+  onChainChange
+}: GasZeroProps) {
+  const [internalSelectedChain, setInternalSelectedChain] = useState<Chain>('base-sepolia');
+
+  // Use external chain if provided (embedded mode), otherwise use internal state
+  const selectedChain = externalSelectedChain || internalSelectedChain;
+  const setSelectedChain = onChainChange || setInternalSelectedChain;
   const [selectedToken, setSelectedToken] = useState<Token>('USDC');
   const [recipientAddress, setRecipientAddress] = useState('');
   const [amount, setAmount] = useState('');
@@ -32,26 +50,35 @@ export default function GasZeroApp() {
   const [checkingApproval, setCheckingApproval] = useState(false);
   const [userETHBalance, setUserETHBalance] = useState('0');
   const [autoApprovingEnabled, setAutoApprovingEnabled] = useState(true);
+  const [isFundingInProgress, setIsFundingInProgress] = useState(false);
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
 
   // Chain configurations
   const chains = {
-    arbitrum: {
+    'eth-sepolia': {
+      name: 'Ethereum Sepolia',
+      color: 'from-purple-500 to-blue-500',
+      icon: '♦️',
+      tokens: ['USDC', 'USDT'],
+      chain: sepolia,
+      relayer: relayerAddresses.relayerAddresses['eth-sepolia'],
+    },
+    'arb-sepolia': {
       name: 'Arbitrum Sepolia',
       color: 'from-blue-500 to-cyan-500',
       icon: '⚡',
       tokens: ['USDC', 'USDT'],
       chain: arbitrumSepolia,
-      relayer: relayerAddresses.relayerAddresses.arbitrum,
+      relayer: relayerAddresses.relayerAddresses['arb-sepolia'],
     },
-    base: {
+    'base-sepolia': {
       name: 'Base Sepolia',
       color: 'from-blue-600 to-indigo-600',
       icon: '🔷',
       tokens: ['USDC', 'USDT'],
       chain: baseSepolia,
-      relayer: relayerAddresses.relayerAddresses.base,
+      relayer: relayerAddresses.relayerAddresses['base-sepolia'],
     },
   };
 
@@ -121,9 +148,50 @@ export default function GasZeroApp() {
     }
   }
 
+  // New combined function: Fund and approve in one flow
+  async function requestETHFundingAndApprove() {
+    console.log('[GASZERO] Starting combined funding + approval flow');
+
+    const fundingToastId = toast.loading('🎁 Step 1: Getting ETH for gas...');
+
+    try {
+      // Step 1: Fund the user
+      const funded = await requestETHFunding(fundingToastId);
+
+      if (!funded) {
+        toast.error('Failed to get funding', { id: fundingToastId });
+        return false;
+      }
+
+      // Step 2: Update balance and continue with approval
+      toast.loading('✍️ Step 2: Please sign the approval...', { id: fundingToastId });
+
+      // Small delay to ensure balance is updated
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      await checkETHBalance();
+
+      // Continue with approval (skip funding check since we just funded)
+      await approveToken(false, true);
+
+      return true;
+
+    } catch (error) {
+      console.error('[GASZERO] Combined flow error:', error);
+      toast.error('Process failed. Please try again.', { id: fundingToastId });
+      return false;
+    }
+  }
+
   // Request ETH funding from relayer
-  async function requestETHFunding() {
-    const toastId = toast.loading('🎁 Requesting ETH for gas-free approval...');
+  async function requestETHFunding(existingToastId?: any) {
+    // Prevent duplicate requests
+    if (isFundingInProgress) {
+      console.log('[GASZERO] Funding already in progress, skipping...');
+      return false;
+    }
+
+    setIsFundingInProgress(true);
+    const toastId = existingToastId || toast.loading('🎁 Requesting ETH for gas-free approval...');
 
     try {
       const response = await fetch('/api/fund-user-eth', {
@@ -132,33 +200,90 @@ export default function GasZeroApp() {
         body: JSON.stringify({
           userAddress: address,
           reason: 'approval_needed',
+          chain: selectedChain, // Pass the selected chain
         }),
       });
+
+      // Check for rate limiting
+      if (!response.ok) {
+        const errorData = await response.json();
+
+        // If rate limited, check if user already has ETH
+        if (response.status === 429) {
+          console.log('[GASZERO] Rate limited, checking if user already has ETH...');
+          await checkETHBalance();
+          const currentBalance = parseEther(userETHBalance);
+
+          if (currentBalance >= parseEther('0.0001')) {
+            console.log('[GASZERO] User already has sufficient ETH!');
+            toast.success('✅ You already have ETH for approval!', { id: toastId });
+            return true; // User has enough ETH, proceed
+          }
+        }
+
+        toast.error(errorData.error || 'Failed to get ETH funding', { id: toastId });
+        return false;
+      }
 
       const result = await response.json();
 
       if (result.success) {
-        toast.success('💰 ETH funding received! Now approving...', { id: toastId });
+        toast.success(
+          <div>
+            <p className="font-bold">💰 ETH funding received!</p>
+            <p className="text-sm">Amount: {result.amount} ETH</p>
+            <p className="text-xs">Gas Price: {result.gasPrice}</p>
+            <p className="text-xs mt-1">Now approving...</p>
+          </div>,
+          { id: toastId, duration: 5000 }
+        );
 
-        // Wait for ETH to be confirmed
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        await checkETHBalance();
+        // Don't auto-approve here if called from combined flow
+        if (!existingToastId) {
+          // Only auto-approve if this was called standalone
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          await checkETHBalance();
 
-        // Auto-approve if enabled
-        if (autoApprovingEnabled) {
-          await approveToken(true);
+          if (autoApprovingEnabled) {
+            await approveToken(true, true);
+          }
         }
+
+        return true;
       } else {
         toast.error(result.error || 'Failed to get ETH funding', { id: toastId });
+        return false;
       }
     } catch (error: any) {
       console.error('Funding error:', error);
       toast.error('Failed to request ETH funding', { id: toastId });
+      return false;
+    } finally {
+      setIsFundingInProgress(false);
     }
   }
 
-  async function approveToken(isAutoApprove = false) {
+  async function approveToken(isAutoApprove = false, skipFundingCheck = false) {
     if (!address || !amount) return;
+
+    // Check if user has enough ETH first (unless we just funded them)
+    if (!skipFundingCheck) {
+      const ethBalance = parseEther(userETHBalance);
+      if (ethBalance < parseEther('0.0001')) {
+        // Request ETH funding AND continue with approval
+        toast('Getting ETH for approval, then you\'ll sign...', {
+          icon: '🚀',
+          duration: 4000,
+        });
+
+        // Fund and continue with approval in one flow
+        const funded = await requestETHFundingAndApprove();
+        if (!funded) {
+          toast.error('Failed to get funding. Please try again.');
+        }
+        return;
+      }
+    }
 
     const toastId = toast.loading(
       isAutoApprove
@@ -171,13 +296,36 @@ export default function GasZeroApp() {
       const tokenAddress = TOKEN_ADDRESSES[selectedChain][selectedToken];
       const relayerAddress = chainConfig.relayer;
 
-      // Check if user has enough ETH
-      const ethBalance = parseEther(userETHBalance);
-      if (ethBalance < parseEther('0.0001')) {
-        // Request ETH funding
-        toast.loading('Need ETH for approval. Requesting funding...', { id: toastId });
-        await requestETHFunding();
-        return;
+      // Ensure MetaMask is available
+      if (typeof window === 'undefined' || !(window as any).ethereum) {
+        throw new Error('No wallet detected. Please install MetaMask.');
+      }
+
+      // Switch to correct network if needed
+      const ethereum = (window as any).ethereum;
+      try {
+        await ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: `0x${chainConfig.chain.id.toString(16)}` }],
+        });
+      } catch (switchError: any) {
+        if (switchError.code === 4902) {
+          // Network not added, add it
+          await ethereum.request({
+            method: 'wallet_addEthereumChain',
+            params: [{
+              chainId: `0x${chainConfig.chain.id.toString(16)}`,
+              chainName: chainConfig.name,
+              rpcUrls: [chainConfig.chain.rpcUrls.default.http[0]],
+              nativeCurrency: chainConfig.chain.nativeCurrency,
+              blockExplorerUrls: [chainConfig.chain.blockExplorers?.default.url],
+            }],
+          });
+        } else if (switchError.code === 4001) {
+          // User rejected the switch
+          toast.error('Please switch to the correct network', { id: toastId });
+          return;
+        }
       }
 
       const walletClient = createWalletClient({
@@ -186,7 +334,14 @@ export default function GasZeroApp() {
         transport: custom((window as any).ethereum),
       });
 
-      const amountToApprove = parseUnits('1000000', 6);
+      const amountToApprove = parseUnits('1000000', 6); // Approve 1M tokens
+
+      console.log('Approval details:', {
+        tokenAddress,
+        spender: relayerAddress,
+        amount: amountToApprove.toString(),
+        userAddress: address,
+      });
 
       const approveData = encodeFunctionData({
         abi: [{
@@ -202,9 +357,12 @@ export default function GasZeroApp() {
         args: [relayerAddress as `0x${string}`, amountToApprove]
       });
 
+      toast.loading('Check MetaMask for approval request...', { id: toastId });
+
       const hash = await walletClient.sendTransaction({
         to: tokenAddress as `0x${string}`,
         data: approveData,
+        gas: 100000n, // Explicit gas limit
       });
 
       toast.loading('Waiting for confirmation...', { id: toastId });
@@ -264,6 +422,7 @@ export default function GasZeroApp() {
 
     try {
       const intent = {
+        type: 'transfer',
         chain: selectedChain,
         from: address,
         to: recipientAddress,
@@ -283,6 +442,7 @@ export default function GasZeroApp() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          type: 'transfer', // Explicitly specify type
           chain: selectedChain,
           from: address,
           to: recipientAddress,
@@ -348,65 +508,71 @@ export default function GasZeroApp() {
     : null;
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          style: {
-            background: '#1f2937',
-            color: '#fff',
-            borderRadius: '12px',
-            border: '1px solid #374151',
-          },
-        }}
-      />
+    <main className={embedded ? "" : "min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900"}>
+      {!embedded && (
+        <>
+          <Toaster
+            position="top-right"
+            toastOptions={{
+              style: {
+                background: '#1f2937',
+                color: '#fff',
+                borderRadius: '12px',
+                border: '1px solid #374151',
+              },
+            }}
+          />
 
-      {/* Animated Background */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob"></div>
-        <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
-        <div className="absolute top-40 left-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000"></div>
-      </div>
+          {/* Animated Background */}
+          <div className="absolute inset-0 overflow-hidden">
+            <div className="absolute -top-40 -right-40 w-80 h-80 bg-purple-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob"></div>
+            <div className="absolute -bottom-40 -left-40 w-80 h-80 bg-blue-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-2000"></div>
+            <div className="absolute top-40 left-40 w-80 h-80 bg-pink-500 rounded-full mix-blend-multiply filter blur-3xl opacity-20 animate-blob animation-delay-4000"></div>
+          </div>
+        </>
+      )}
 
       <div className="relative z-10">
-        {/* Header */}
-        <div className="border-b border-white/10 backdrop-blur-md bg-black/20">
-          <div className="container mx-auto px-4 py-4">
-            <div className="flex justify-between items-center">
-              <div className="flex items-center gap-4">
-                <div className="relative">
-                  <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full blur-lg opacity-50"></div>
-                  <div className="relative bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-full w-12 h-12 flex items-center justify-center text-2xl font-bold">
-                    ⚡
+        {!embedded && (
+          <div className="border-b border-white/10 backdrop-blur-md bg-black/20">
+            <div className="container mx-auto px-4 py-4">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full blur-lg opacity-50"></div>
+                    <div className="relative bg-gradient-to-r from-blue-500 to-purple-500 text-white rounded-full w-12 h-12 flex items-center justify-center text-2xl font-bold">
+                      ⚡
+                    </div>
+                  </div>
+                  <div>
+                    <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+                      GasZero
+                    </h1>
+                    <p className="text-xs text-gray-400">Truly gasless from day one</p>
                   </div>
                 </div>
-                <div>
-                  <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
-                    GasZero
-                  </h1>
-                  <p className="text-xs text-gray-400">Truly gasless from day one</p>
+                <div className="flex items-center gap-4">
+                  {address && (
+                    <div className="text-right">
+                      <p className="text-xs text-gray-400">ETH Balance</p>
+                      <p className="text-sm font-mono text-white">
+                        {parseFloat(userETHBalance).toFixed(4)} ETH
+                      </p>
+                    </div>
+                  )}
+                  <ConnectButton />
                 </div>
-              </div>
-              <div className="flex items-center gap-4">
-                {address && (
-                  <div className="text-right">
-                    <p className="text-xs text-gray-400">ETH Balance</p>
-                    <p className="text-sm font-mono text-white">
-                      {parseFloat(userETHBalance).toFixed(4)} ETH
-                    </p>
-                  </div>
-                )}
-                <ConnectButton />
               </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Main Content */}
         <div className="container mx-auto px-4 py-12">
           <div className="max-w-2xl mx-auto">
 
             {!isConnected ? (
+              embedded ? null : (
               <div className="text-center py-20">
                 <div className="mb-8 relative inline-block">
                   <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full blur-2xl opacity-30 animate-pulse"></div>
@@ -446,6 +612,7 @@ export default function GasZeroApp() {
                   </div>
                 </div>
               </div>
+              )
             ) : (
               <>
                 {/* Chain Selector */}
@@ -453,7 +620,7 @@ export default function GasZeroApp() {
                   <label className="block text-sm font-medium text-gray-300 mb-3">
                     Select Chain
                   </label>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     {Object.entries(chains).map(([key, chain]) => (
                       <button
                         key={key}
@@ -577,7 +744,7 @@ export default function GasZeroApp() {
                           </p>
                           <p className="text-xs text-gray-300 mb-3">
                             {parseFloat(userETHBalance) < 0.0001
-                              ? "Don't have ETH? No problem! We'll fund your approval gas."
+                              ? "No ETH? One click does it all: We fund → You sign → Done! 🚀"
                               : "You have ETH. Click to approve the relayer."}
                           </p>
                           <button
@@ -585,7 +752,7 @@ export default function GasZeroApp() {
                             className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-orange-500 hover:from-yellow-400 hover:to-orange-400 rounded-lg text-sm font-semibold text-white transition-all"
                           >
                             {parseFloat(userETHBalance) < 0.0001
-                              ? '🎁 Get Free ETH & Approve'
+                              ? '🎆 One-Click: Fund + Approve'
                               : `Approve ${selectedToken}`}
                           </button>
                         </div>
