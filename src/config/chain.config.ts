@@ -8,7 +8,7 @@ export const NETWORKS = {
     chain: sepolia,
     chainId: 11155111,
     // Ethereum Sepolia Uniswap V3 Router
-    routerAddress: '0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD',
+    routerAddress: '0x3bFA4769FB09eefC5a80d6E87c3B9C650f7Ae48E',
     // Ethereum Sepolia Explorer
     explorer: 'https://sepolia.etherscan.io'
   },
@@ -54,9 +54,10 @@ export interface Token {
 export const DEX_CONFIG = {
   'eth-sepolia': {
     ROUTER_ADDRESS: NETWORKS['eth-sepolia'].routerAddress,
+    QUOTER_ADDRESS: '0xEd1f6473345F45b75F8179591dd5bA1888cf2FB3', // Quoter V2
     TOKENS: {
       ETH: {
-        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',  // Sepolia WETH
+        address: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14',  // Sepolia WETH
         decimals: 18,
         symbol: 'ETH',
         icon: '⚡'
@@ -68,22 +69,39 @@ export const DEX_CONFIG = {
         icon: '💰'
       }
     },
+    POOLS: {
+      'USDC-ETH': {
+        address: '0xC31a3878E3B0739866F8fC52b97Ae9611aBe427c', // 0.3% fee tier pool with liquidity
+        fee: 3000,
+        token0: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238', // USDC
+        token1: '0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14', // WETH
+      }
+    },
     POOL_FEES
   },
   'arb-sepolia': {
     ROUTER_ADDRESS: NETWORKS['arb-sepolia'].routerAddress,
+    QUOTER_ADDRESS: '0xC195976fEF0985886E37036E2DF62bF371E12Df0', // Quoter V2 on Arbitrum Sepolia
     TOKENS: {
       ETH: {
-        address: '0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9',  // Arbitrum Sepolia WETH
+        address: '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73',  // Arbitrum Sepolia WETH
         decimals: 18,
         symbol: 'ETH',
         icon: '⚡'
       },
       USDC: {
-        address: '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',  // Arbitrum Sepolia USDC
+        address: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',  // Arbitrum Sepolia USDC (correct address)
         decimals: 6,
         symbol: 'USDC',
         icon: '💰'
+      }
+    },
+    POOLS: {
+      'USDC-ETH': {
+        address: '0xTODO', // Add pool address if you have one with liquidity
+        fee: 3000,
+        token0: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', // USDC
+        token1: '0x980B62Da83eFf3D4576C647993b0c1D7faf17c73', // WETH
       }
     },
     POOL_FEES

@@ -71,19 +71,13 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
 
     // Check for error responses
     if (!response.ok) {
-      throw new Error(`API Error (${response.status}): ${JSON.stringify(responseData)}`);
+      const errorMsg = responseData?.data?.message || responseData?.msg || `HTTP ${response.status}`;
+      throw new Error(errorMsg);
     }
     return responseData;
   } catch (error) {
-    // Log error message
-    console.error('Fetch error:', error instanceof Error ? error.message : 'Unknown error');
-
-    // Re-throw with more context
-    if (error instanceof Error) {
-      throw new Error(`API request failed: ${error.message}`);
-    } else {
-      throw new Error('API request failed with unknown error');
-    }
+    // Just throw the error without additional wrapping
+    throw error;
   }
 }
 
@@ -204,8 +198,11 @@ export interface GetPriceResponse {
   status: number;
   msg: string;
   data: {
-    amountOut: string;
-    priceImpact: string;
+    amountIn: string;
+    amountsOut: string[]; // Array of amounts at each step in the path
+    path: string[];
+    prices: Record<string, any>;
+    priceImpact?: string;
   };
 }
 

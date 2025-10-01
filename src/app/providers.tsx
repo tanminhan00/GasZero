@@ -6,21 +6,16 @@ import '@rainbow-me/rainbowkit/styles.css';
 import { getDefaultConfig, RainbowKitProvider } from '@rainbow-me/rainbowkit';
 import { WagmiProvider } from 'wagmi';
 import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
-import { baseSepolia } from 'wagmi/chains';
+import { baseSepolia, sepolia, arbitrumSepolia } from 'wagmi/chains';
 
-if (!process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID) {
-  throw new Error(
-    'NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID is not set in your environment variables. ' +
-    'Get one from https://cloud.walletconnect.com/'
-  );
-}
-
-const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
+// WalletConnect project ID is optional for development
+// Get one from https://cloud.walletconnect.com/ for production
+const walletConnectProjectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || 'a5819fcf1f36b210f9c5f1f5e978b6b3'; // Default fallback for development
 
 const config = getDefaultConfig({
   appName: 'OneTap',
   projectId: walletConnectProjectId,
-  chains: [baseSepolia],
+  chains: [baseSepolia, sepolia, arbitrumSepolia], // Base Sepolia as default
   ssr: true,
 });
 
